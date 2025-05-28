@@ -7,11 +7,11 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
 from constants import *
-from game_ui import GameUI
-from maze import Maze
-from player import Player
-from ai_player import AIPlayer
-from sprite_manager import SpriteManager
+from ui.game_ui import GameUI
+from core.maze import Maze
+from entities.player import Player
+from entities.ai_player import AIPlayer
+from core.sprite_manager import SpriteManager
 from game.game_state import GameState, GameStateManager
 
 

@@ -1,6 +1,6 @@
 import pygame
 from constants import *
-from bg import StarryBackground
+from core.bg import StarryBackground
 from maze_layout import MAZE_LAYOUT
 import math
 

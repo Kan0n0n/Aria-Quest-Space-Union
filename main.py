@@ -4,16 +4,16 @@ import os
 
 # Game components
 from constants import *
-from sprite_manager import SpriteManager
-from maze import Maze
-from game_ui import GameUI
-from music import OneShotMusicManager
+from core.sprite_manager import SpriteManager
+from core.maze import Maze
+from ui.game_ui import GameUI
+from core.music import OneShotMusicManager
 from maze_layout import POSITIONS, MAZE_INFO  # Import position definitions
 
 # Entities
-from player import Player
-from ai_player import AIPlayer
-from inky_ghost import InkyGhost
+from entities.player import Player
+from entities.ai_player import AIPlayer
+from entities.inky_ghost import InkyGhost
 
 # Game handler
 from game.game_state import GameState, GameStateManager

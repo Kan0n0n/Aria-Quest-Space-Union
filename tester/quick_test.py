@@ -17,11 +17,11 @@ def quick_test():
         # Test imports
         print("Testing imports...")
         from constants import SCREEN_WIDTH, SCREEN_HEIGHT
-        from sprite_manager import SpriteManager
-        from maze import Maze
-        from player import Player
-        from ai_player import AIPlayer
-        from game_ui import GameUI
+        from core.sprite_manager import SpriteManager
+        from core.maze import Maze
+        from entities.player import Player
+        from entities.ai_player import AIPlayer
+        from ui.game_ui import GameUI
 
         print("✓ All imports successful")
         # Test sprite manager
