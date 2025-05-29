@@ -83,6 +83,8 @@ class SpriteManager:
             "right": os.path.join(assets_path, "mizuki_right.png"),
         }
 
+        
+
         self.load_custom_sprites("player1", ena_sprites)
         self.load_custom_sprites("ai1", mizuki_sprites)
 

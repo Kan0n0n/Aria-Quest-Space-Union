@@ -1,6 +1,7 @@
 import pygame
 from constants import *
 import os
+import math
 
 
 class TopBarUI:
@@ -133,16 +134,17 @@ class BottomBarUI:
         pygame.draw.rect(bar_surface, background_color, (0, 0, SCREEN_WIDTH, self.bar_height))
         pygame.draw.rect(bar_surface, WHITE, (0, 0, SCREEN_WIDTH, self.bar_height), 1)
 
-        # Context-sensitive instructions
-        instructions = self._get_instructions(game_state)
+        if game_state is not "START":
+            # Context-sensitive instructions
+            instructions = self._get_instructions(game_state)
 
-        # Centered text
-        instruction_text = self.font.render(instructions, True, WHITE)
-        text_rect = instruction_text.get_rect(center=(SCREEN_WIDTH // 2, self.bar_height // 2))
-        bar_surface.blit(instruction_text, text_rect)
+            # Centered text
+            instruction_text = self.font.render(instructions, True, WHITE)
+            text_rect = instruction_text.get_rect(center=(SCREEN_WIDTH // 2, self.bar_height // 2))
+            bar_surface.blit(instruction_text, text_rect)
 
-        # Blit to screen
-        screen.blit(bar_surface, (0, bar_y))
+            # Blit to screen
+            screen.blit(bar_surface, (0, bar_y))
 
     def _get_instructions(self, game_state):
         if game_state == "START":
@@ -240,62 +242,55 @@ class GameUI:
         screen.blit(pause_text, pause_rect)
 
     def render_start_screen(self, screen):
-        screen.fill(BLACK)
+        # Try to load background image first
+        background_image = None
+        try:
+            # Đường dẫn đến file PNG start screen của bạn
+            bg_path = os.path.join("assets", "intro_scene_1.png")
+            if os.path.exists(bg_path):
+                background_image = pygame.image.load(bg_path).convert()
+                # Scale image to fit screen
+                background_image = pygame.transform.scale(background_image, (SCREEN_WIDTH, SCREEN_HEIGHT))
+        except Exception as e:
+            print(f"Could not load start screen image: {e}")
+            background_image = None
 
-        # Title with shadow effect
-        shadow_offset = 3
-        title_text_shadow = self.large_font.render("ARIA QUEST: SPACE UNION", True, (50, 50, 50))
-        title_text = self.large_font.render("ARIA QUEST: SPACE UNION", True, YELLOW)
+        if background_image:
+            # Use PNG background
+            screen.blit(background_image, (0, 0))
 
-        title_rect = title_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 150))
-        shadow_rect = title_rect.copy()
-        shadow_rect.x += shadow_offset
-        shadow_rect.y += shadow_offset
+            # Add only essential text over the image
+            # use normal font for instructions
+            instruction_font = self.font  # fallback to default
+            try:
+                instruction_font_path = os.path.join("fonts", "Orbitron-Regular.ttf")
+                if os.path.exists(instruction_font_path):
+                    instruction_font = pygame.font.Font(instruction_font_path, 24)  # Adjust size as needed
+                else:
+                    print("Instruction font not found, using default")
+            except Exception as e:
+                print(f"Could not load instruction font: {e}")
 
-        screen.blit(title_text_shadow, shadow_rect)
-        screen.blit(title_text, title_rect)
+            current_time = pygame.time.get_ticks()
+            pulse_speed = 0.002
+            alpha_value = int(155 + 100 * abs(math.sin(current_time * pulse_speed)))
 
-        # Game description panel
-        panel_width = 600
-        panel_height = 250
-        panel_x = (SCREEN_WIDTH - panel_width) // 2
-        panel_y = SCREEN_HEIGHT // 2 - 50
+            instructions_text = instruction_font.render("Press SPACE to start", True, BLACK)
+            instructions_rect = instructions_text.get_rect(center=(640, 460))
 
-        panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
-        pygame.draw.rect(screen, (30, 30, 30), panel_rect)
-        pygame.draw.rect(screen, YELLOW, panel_rect, 2)
+            # Add text shadow for better visibility
+            shadow_text = instruction_font.render("Press SPACE to start", True, WHITE)
+            shadow_rect = instructions_rect.copy()
+            shadow_rect.x += 2
+            shadow_rect.y += 2
 
-        instructions = [
-            "Two Player Competitive Pacman",
-            "",
-            "Ena (Player 1): WASD keys - Yellow",
-            "Mizuki (AI Player): Computer controlled - Green",
-            "",
-            "Collect pellets to score points!",
-            "Avoid the ghost or lose health!",
-            "Compete for the highest score!",
-            "",
-            "Press SPACE to start | ESC to quit",
-        ]
+            # Create a surface for the pulsing effect
+            text_surface = pygame.Surface(instructions_text.get_size(), pygame.SRCALPHA)
+            text_surface.set_alpha(alpha_value)
+            text_surface.blit(instructions_text, (0, 0))
 
-        y_offset = panel_y + 20
-        for instruction in instructions:
-            if instruction == "":
-                y_offset += 10
-                continue
-
-            color = WHITE
-            if "Ena" in instruction:
-                color = YELLOW
-            elif "Mizuki" in instruction:
-                color = GREEN
-            elif "SPACE" in instruction or "ESC" in instruction:
-                color = CYAN
-
-            text = self.small_font.render(instruction, True, color)
-            text_rect = text.get_rect(center=(SCREEN_WIDTH // 2, y_offset))
-            screen.blit(text, text_rect)
-            y_offset += 25
+            screen.blit(shadow_text, shadow_rect)
+            screen.blit(text_surface, instructions_rect)
 
     def _render_multiline_text(self, screen, text, center_x, start_y, color, font, max_width):
         lines = text.split('\n')

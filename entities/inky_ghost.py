@@ -22,6 +22,7 @@ class InkyGhost:
         self.target = None
         self.player_id = player_id
         self.can_chase = True
+        self.dead = False
 
         # Animation properties
         self.animation_timer = 0
@@ -51,7 +52,7 @@ class InkyGhost:
         # Food tracking for enraged mode
         self.total_food_count = 0  # Will be set by maze
         self.is_enraged = False  # Triggered when 80% food eaten
-        self.enraged_speed_multiplier = 1.6  # 60% speed increase when enraged
+        self.enraged_speed_multiplier = 1.5  # 60% speed increase when enraged
 
         # Improved scatter behavior using maze layout positions
         self.scatter_points = self._get_scatter_points_from_maze()
@@ -563,3 +564,22 @@ class InkyGhost:
         """Set target to closest player"""
         target = self.get_closest_player(target_a_pos, target_b_pos)
         self.target = target
+
+    def is_dead(self):
+        return self.dead
+
+    def kill(self):
+        """Mark ghost as dead"""
+        self.dead = True
+        self.can_chase = False
+        self.moving = False
+        self.path = []
+        self.current_path_index = 0
+        print(f"Inky Ghost {self.player_id} has been killed!")
+
+    def revive(self, start_x, start_y):
+        """Revive ghost at starting position"""
+        self.reset_position(start_x, start_y)
+        self.dead = False
+        self.can_chase = True
+        print(f"Inky Ghost {self.player_id} has been revived at ({start_x}, {start_y})!")

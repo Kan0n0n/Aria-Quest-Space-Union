@@ -4,6 +4,7 @@ from collections import deque
 from constants import *
 from entities.player_base import PlayerBase
 import math
+import heapq
 
 
 class AIPlayer(PlayerBase):
@@ -16,21 +17,48 @@ class AIPlayer(PlayerBase):
         self.path = []
         self.target = None
         self.decision_timer = 0
+        self.current_target = None  # Current target position for hunting
 
-    def update(self, maze, player_position=None):
+        # Enhanced AI state tracking
+        self.power_timer = 0  # Time remaining with power pellet effect
+        self.last_known_player_pos = None
+        self.danger_zones = set()  # Positions to avoid
+        self.exploration_bonus = {}  # Bonus for exploring new areas
+
+    def update(self, maze, player_position=None, ghosts_positions=None):
         # Use base class methods
         self.update_invincibility()
         self.update_animation()
 
+        # Update power timer
+        if self.power_timer > 0:
+            self.power_timer -= 1
+
         self.decision_timer += 1
 
+        # Update last known player position
+        if player_position:
+            self.last_known_player_pos = player_position
+
         # Make decisions every few frames to avoid too frequent changes
-        if self.decision_timer >= 10:
-            self._make_decision(maze, player_position)
+        if self.decision_timer >= 8:  # Slightly more responsive
+            self._make_intelligent_decision(maze, player_position, ghosts_positions)
             self.decision_timer = 0
 
-        # Check if we can change direction
-        if self.movement_progress <= 0.1:
+        # Check if AI is stuck and needs immediate help
+        if self._is_stuck(maze):
+            self._find_alternative_direction(maze)
+            # Force immediate direction change if stuck
+            if self.next_direction != self.direction:
+                dx, dy = DIRECTIONS[self.next_direction]
+                new_x = self.grid_x + dx
+                new_y = self.grid_y + dy
+                if maze.is_valid_position(new_x, new_y):
+                    self.direction = self.next_direction
+                    self.movement_progress = 0.0
+
+        # FIXED: Allow direction changes at any point during movement, not just at 0.1
+        if self.movement_progress <= 0.3:
             dx, dy = DIRECTIONS[self.next_direction]
             new_x = self.grid_x + dx
             new_y = self.grid_y + dy
@@ -53,97 +81,446 @@ class AIPlayer(PlayerBase):
                 self.grid_y = target_y
                 self.movement_progress = 0.0
 
-                # Collect pellets
+                # Collect pellets and handle power pellets
                 points = maze.collect_pellet(self.grid_x, self.grid_y)
                 self.score += points
+
+                # If we collected a power pellet, activate power mode
+                if points >= 50:
+                    self.power_timer = 300
         else:
             self.moving = False
             self.movement_progress = 0.0
-            # If can't move, try a different direction
             self._find_alternative_direction(maze)
+            self.movement_progress = 0.0
 
         # Update pixel position for smooth movement
         self._update_pixel_position()
 
-    def _make_decision(self, maze, player_position=None):
-        # Skip decision making if dead
+    def _make_intelligent_decision(self, maze, player_position=None, ghosts_positions=None):
+        """Enhanced decision making based on the ReflexAgent concept"""
         if self.is_dead():
             return
 
-        if self.ai_type == "simple":
-            self._simple_ai(maze)
-        elif self.ai_type == "pellet_hunter":
-            self._pellet_hunter_ai(maze)
+        # Analyze current situation
+        situation = self._analyze_situation(maze, player_position, ghosts_positions)
+
+        if self.ai_type == "reflex_agent":
+            self._reflex_agent_behavior(maze, situation)
+        elif self.ai_type == "smart_hunter":
+            self._smart_hunter_ai(maze, situation)
         elif self.ai_type == "competitive":
             self._competitive_ai(maze, player_position)
         else:
-            self._simple_ai(maze)
+            self._enhanced_simple_ai(maze, situation)
 
-    def _simple_ai(self, maze):
-        # Get valid directions
+    def _analyze_situation(self, maze, player_position, ghosts_positions):
+        """Analyze the current game situation for intelligent decision making"""
+        situation = {
+            'has_power': self.power_timer > 0,
+            'power_time_left': self.power_timer,
+            'nearest_pellet': self._find_nearest_pellet(maze),
+            'nearest_power_pellet': self._find_nearest_power_pellet(maze),
+            'player_distance': float('inf'),
+            'ghost_distances': [],
+            'safe_directions': self._get_safe_directions(maze, ghosts_positions),
+            'exploration_opportunities': self._find_unexplored_areas(maze),
+        }
+
+        if player_position:
+            situation['player_distance'] = self._manhattan_distance((self.grid_x, self.grid_y), player_position)
+
+        if ghosts_positions:
+            for ghost_pos in ghosts_positions:
+                distance = self._manhattan_distance((self.grid_x, self.grid_y), ghost_pos)
+                situation['ghost_distances'].append((ghost_pos, distance))
+
+        return situation
+
+    def _reflex_agent_behavior(self, maze, situation):
+        """Intelligent reflex agent behavior"""
+        # Priority 1: Avoid immediate danger if no power
+        if not situation['has_power'] and situation['ghost_distances']:
+            min_ghost_distance = min(dist for _, dist in situation['ghost_distances'])
+            if min_ghost_distance <= 5:
+                self.current_target = None  # Clear target when escaping
+                self._escape_from_ghosts(maze, situation['ghost_distances'])
+                return
+
+        # Priority 2: Hunt ghosts if powered and time is sufficient
+        if situation['has_power'] and situation['power_time_left'] > 60:
+            nearest_ghost = self._find_nearest_ghost(situation['ghost_distances'])
+            if nearest_ghost and nearest_ghost[1] <= 8:
+                self.current_target = nearest_ghost[0]
+                self._hunt_target(maze, nearest_ghost[0])
+                return
+
+        # Priority 3: Get power pellet if ghosts are nearby and no power
+        if (
+            not situation['has_power']
+            and situation['nearest_power_pellet']
+            and situation['ghost_distances']
+            and min(dist for _, dist in situation['ghost_distances']) <= 6
+        ):
+            self.current_target = situation['nearest_power_pellet']
+            self._hunt_target(maze, situation['nearest_power_pellet'])
+            return
+
+        # Priority 4: Compete with player if close
+        if situation['player_distance'] <= 5:
+            self._competitive_behavior(maze, situation)
+            return
+
+        # Priority 5: Hunt pellets efficiently
+        if situation['nearest_pellet']:
+            self.current_target = situation['nearest_pellet']
+            self._hunt_target(maze, situation['nearest_pellet'])
+        else:
+            self.current_target = None
+            self._enhanced_simple_ai(maze, situation)
+
+    def _smart_hunter_ai(self, maze, situation):
+        """Advanced hunting AI using A* pathfinding"""
+
+        if not situation['has_power'] and situation['ghost_distances']:
+            min_ghost_distance = min(dist for _, dist in situation['ghost_distances'])
+            if min_ghost_distance <= 3:  # Avoid ghosts when close
+                self.path = []
+                self._escape_from_ghosts(maze, situation['ghost_distances'])
+                return
+
+        # Use A* to find optimal path to nearest valuable target
+        target = self._select_optimal_target(maze, situation)
+        if target:
+            path = self._a_star_search(maze, (self.grid_x, self.grid_y), target, situation.get('ghost_distances', []))
+            if path and len(path) > 1:
+                self.path = path
+                next_pos = path[1]
+                self._set_direction_to_position(next_pos)
+            else:
+                self.path = []
+                self._enhanced_simple_ai(maze, situation)
+        else:
+            self.path = []
+            self._enhanced_simple_ai(maze, situation)
+
+    def _select_optimal_target(self, maze, situation):
+        """Select the most valuable target using heuristic evaluation"""
+        targets = []
+
+        # Add regular pellets
+        for pellet_pos in maze.pellets:
+            distance = self._manhattan_distance((self.grid_x, self.grid_y), pellet_pos)
+            value = 10 / (distance + 1)  # Closer = higher value
+            targets.append((pellet_pos, value, 'pellet'))
+
+        # Add power pellets with higher priority
+        for pellet_pos in maze.power_pellets:
+            distance = self._manhattan_distance((self.grid_x, self.grid_y), pellet_pos)
+            value = 50 / (distance + 1)  # Much higher value
+            targets.append((pellet_pos, value, 'power'))
+
+        # Add exploration bonuses
+        for pos, bonus in self.exploration_bonus.items():
+            if maze.is_valid_position(pos[0], pos[1]):
+                distance = self._manhattan_distance((self.grid_x, self.grid_y), pos)
+                value = bonus / (distance + 1)
+                targets.append((pos, value, 'explore'))
+
+        if targets:
+            # Return the highest value target
+            best_target = max(targets, key=lambda x: x[1])
+            return best_target[0]
+        return None
+
+    def _a_star_search(self, maze, start, goal, ghost_distances=None):
+        """A* pathfinding algorithm"""
+
+        def heuristic(pos1, pos2):
+            return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
+        def ghost_penalty(pos):
+            """Add penalty for positions near ghosts"""
+            if not ghost_distances:
+                return 0
+
+            penalty = 0
+            for ghost_pos, _ in ghost_distances:
+                dist = abs(pos[0] - ghost_pos[0]) + abs(pos[1] - ghost_pos[1])
+                if dist <= 1:  # Within 3 tiles of ghost
+                    penalty += (4 - dist) * 5  # Higher penalty for closer positions
+            return penalty
+
+        open_set = [(0, start, [start])]
+        closed_set = set()
+
+        while open_set:
+            f_score, current, path = heapq.heappop(open_set)
+
+            if current == goal:
+                return path
+
+            if current in closed_set:
+                continue
+
+            closed_set.add(current)
+
+            for next_x, next_y, _ in maze.get_neighbors(current[0], current[1]):
+                next_pos = (next_x, next_y)
+
+                if next_pos in closed_set:
+                    continue
+
+                new_path = path + [next_pos]
+                g_score = len(new_path) - 1
+                h_score = heuristic(next_pos, goal)
+                ghost_cost = ghost_penalty(next_pos)
+                f_score = g_score + h_score + ghost_cost
+
+                heapq.heappush(open_set, (f_score, next_pos, new_path))
+
+        return []  # No path found
+
+    def _escape_from_ghosts(self, maze, ghost_distances):
+        """Escape ghosts, but bias toward progress if not in immediate danger."""
+        from collections import deque
+
+        LOOKAHEAD = 6
+        ghost_future_positions = set()
+
+        # Predict ghost positions for the next few steps
+        for ghost_pos, _ in ghost_distances:
+            for direction, (dx, dy) in DIRECTIONS.items():
+                gx, gy = ghost_pos
+                for step in range(1, LOOKAHEAD + 1):
+                    nx, ny = gx + dx * step, gy + dy * step
+                    if maze.is_valid_position(nx, ny):
+                        ghost_future_positions.add((nx, ny))
+                    else:
+                        break
+
+        start = (self.grid_x, self.grid_y)
+        queue = deque()
+        queue.append((start, [], 0))
+        visited = set()
+        best_path = None
+        best_score = -float('inf')
+
+        # Find nearest pellet for progress bonus
+        nearest_pellet = self._find_nearest_pellet(maze)
+
+        def pellet_distance(pos):
+            if nearest_pellet:
+                return self._manhattan_distance(pos, nearest_pellet)
+            return 0
+
+        while queue:
+            (x, y), path, depth = queue.popleft()
+            if (x, y) in visited or depth > LOOKAHEAD:
+                continue
+            visited.add((x, y))
+
+            min_ghost_dist = min(self._manhattan_distance((x, y), ghost_pos) for ghost_pos, _ in ghost_distances)
+            future_penalty = -100 if (x, y) in ghost_future_positions else 0
+            neighbors = [(nx, ny) for nx, ny, _ in maze.get_neighbors(x, y) if maze.is_valid_position(nx, ny)]
+            tunnel_penalty = -30 if len(neighbors) <= 1 and depth > 0 else 0
+
+            # Progress bonus: encourage moving toward pellets if not in immediate danger
+            progress_bonus = 0
+            if min_ghost_dist > 2:  # Only if not in immediate danger
+                progress_bonus = max(0, 10 - pellet_distance((x, y)))  # More bonus the closer to pellet
+
+            score = min_ghost_dist * 3 + future_penalty + tunnel_penalty - depth * 2 + progress_bonus
+
+            if score > best_score:
+                best_score = score
+                best_path = path
+
+            for nx, ny, _ in maze.get_neighbors(x, y):
+                if (nx, ny) not in visited and maze.is_valid_position(nx, ny):
+                    queue.append(((nx, ny), path + [(nx, ny)], depth + 1))
+
+        if best_path and len(best_path) > 0:
+            next_pos = best_path[0]
+            self._set_direction_to_position(next_pos)
+        else:
+            # Fallback: pick the direction that maximizes immediate distance from ghosts and progress
+            best_direction = None
+            best_score = -float('inf')
+            for direction, (dx, dy) in DIRECTIONS.items():
+                nx, ny = self.grid_x + dx, self.grid_y + dy
+                if not maze.is_valid_position(nx, ny):
+                    continue
+                min_ghost_dist = min(self._manhattan_distance((nx, ny), ghost_pos) for ghost_pos, _ in ghost_distances)
+                progress_bonus = 0
+                if min_ghost_dist > 2 and nearest_pellet:
+                    progress_bonus = max(0, 10 - self._manhattan_distance((nx, ny), nearest_pellet))
+                score = min_ghost_dist + progress_bonus
+                if score > best_score:
+                    best_score = score
+                    best_direction = direction
+            if best_direction:
+                self.next_direction = best_direction
+            else:
+                self._enhanced_simple_ai(maze, {})
+
+    def _hunt_target(self, maze, target):
+        """Hunt a specific target using BFS pathfinding with fallback"""
+        self.current_target = target
+
+        # First try pathfinding
+        path = self._find_path_to_target(maze, target)
+        if path and len(path) > 1:
+            self.path = path
+            next_pos = path[1]
+            self._set_direction_to_position(next_pos)
+        else:
+            # Fallback: use direct direction calculation
+            self.path = []
+            best_direction = self._get_best_direction_for_target(maze, target)
+            if best_direction:
+                self.next_direction = best_direction
+            else:
+                self._enhanced_simple_ai(maze, {})
+
+    def _competitive_behavior(self, maze, situation):
+        """Competitive behavior when near player"""
+        if situation['nearest_pellet']:
+            # Try to reach the nearest pellet before the player
+            player_to_pellet = self._manhattan_distance(self.last_known_player_pos or (0, 0), situation['nearest_pellet'])
+            ai_to_pellet = self._manhattan_distance((self.grid_x, self.grid_y), situation['nearest_pellet'])
+
+            if ai_to_pellet <= player_to_pellet:
+                # We can reach it faster, go for it
+                self._hunt_target(maze, situation['nearest_pellet'])
+            else:
+                # Look for alternative targets
+                self._find_alternative_pellet(maze)
+        else:
+            self._enhanced_simple_ai(maze, situation)
+
+    def _enhanced_simple_ai(self, maze, situation):
+        """Enhanced simple AI with better decision making"""
         valid_directions = []
+        direction_scores = {}
+
         for direction, (dx, dy) in DIRECTIONS.items():
             new_x = self.grid_x + dx
             new_y = self.grid_y + dy
             if maze.is_valid_position(new_x, new_y):
                 valid_directions.append(direction)
 
+                # Score this direction
+                score = 0
+
+                # Prefer continuing in same direction
+                if direction == self.direction:
+                    score += 2
+
+                # Avoid dead ends
+                neighbors = len([n for n in maze.get_neighbors(new_x, new_y)])
+                score += neighbors
+
+                # NEW: Penalize directions that lead toward ghosts
+                if hasattr(situation, 'ghost_distances') and situation.get('ghost_distances'):
+                    for ghost_pos, _ in situation['ghost_distances']:
+                        ghost_distance = self._manhattan_distance((new_x, new_y), ghost_pos)
+                        if ghost_distance <= 4 and not situation.get('has_power', False):
+                            score -= 10  # Heavy penalty for moving toward ghosts
+
+                # Bonus for unexplored areas
+                if (new_x, new_y) in self.exploration_bonus:
+                    score += self.exploration_bonus.get((new_x, new_y), 0)
+
+                direction_scores[direction] = score
+
         if valid_directions:
-            # Prefer continuing in the same direction if possible
-            if self.direction in valid_directions and random.random() < 0.7:
-                self.next_direction = self.direction
+            # Choose direction with highest score, with some randomness
+            if random.random() < 0.8:  # 80% optimal, 20% random
+                best_direction = max(valid_directions, key=lambda d: direction_scores.get(d, 0))
+                self.next_direction = best_direction
             else:
                 self.next_direction = random.choice(valid_directions)
 
-    def _pellet_hunter_ai(self, maze):
-        # Find nearest pellet
-        nearest_pellet = self._find_nearest_pellet(maze)
-        if nearest_pellet:
-            path = self._find_path_to_target(maze, nearest_pellet)
-            if path and len(path) > 1:
-                next_pos = path[1]  # First step in path
-                self._set_direction_to_position(next_pos)
-            else:
-                self._simple_ai(maze)  # Fallback
-        else:
-            self._simple_ai(maze)  # No pellets left
+    # Helper methods
+    def _manhattan_distance(self, pos1, pos2):
+        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
 
-    def _competitive_ai(self, maze, player_position):
-        if player_position:
-            # If close to player, try to move away or compete for pellets
-            distance = abs(self.grid_x - player_position[0]) + abs(self.grid_y - player_position[1])
-            if distance < 5:
-                # Move away from player
-                self._move_away_from_position(maze, player_position)
-            else:
-                # Hunt pellets normally
-                self._pellet_hunter_ai(maze)
-        else:
-            self._pellet_hunter_ai(maze)
+    def _find_nearest_power_pellet(self, maze):
+        if not maze.power_pellets:
+            return None
 
-    # Find the nearest pellet (regular or power) based on Manhattan distance
+        nearest = min(maze.power_pellets, key=lambda p: self._manhattan_distance((self.grid_x, self.grid_y), p))
+        return nearest
+
+    def _find_nearest_ghost(self, ghost_distances):
+        if not ghost_distances:
+            return None
+        return min(ghost_distances, key=lambda x: x[1])
+
+    def _get_safe_directions(self, maze, ghosts_positions):
+        if not ghosts_positions:
+            return list(DIRECTIONS.keys())
+
+        safe_directions = []
+        for direction, (dx, dy) in DIRECTIONS.items():
+            new_x = self.grid_x + dx
+            new_y = self.grid_y + dy
+
+            if not maze.is_valid_position(new_x, new_y):
+                continue
+
+            # Check if this position is safe from ghosts
+            safe = True
+            for ghost_pos in ghosts_positions:
+                if self._manhattan_distance((new_x, new_y), ghost_pos) <= 2:
+                    safe = False
+                    break
+
+            if safe:
+                safe_directions.append(direction)
+
+        return safe_directions or list(DIRECTIONS.keys())  # Fallback to all directions
+
+    def _find_unexplored_areas(self, maze):
+        # This would require tracking visited positions
+        # For now, return empty dict
+        return {}
+
+    def _find_alternative_pellet(self, maze):
+        # Find second nearest pellet
+        pellets = list(maze.pellets)
+        if len(pellets) >= 2:
+            distances = [(p, self._manhattan_distance((self.grid_x, self.grid_y), p)) for p in pellets]
+            distances.sort(key=lambda x: x[1])
+            if len(distances) > 1:
+                self._hunt_target(maze, distances[1][0])
+            else:
+                self._hunt_target(maze, distances[0][0])
+
+    # Keep existing methods that are still useful
     def _find_nearest_pellet(self, maze):
         nearest = None
         min_distance = float("inf")
 
         # Check regular pellets
         for pellet_pos in maze.pellets:
-            distance = abs(self.grid_x - pellet_pos[0]) + abs(self.grid_y - pellet_pos[1])
+            distance = self._manhattan_distance((self.grid_x, self.grid_y), pellet_pos)
             if distance < min_distance:
                 min_distance = distance
                 nearest = pellet_pos
 
         # Check power pellets (higher priority)
         for pellet_pos in maze.power_pellets:
-            distance = abs(self.grid_x - pellet_pos[0]) + abs(self.grid_y - pellet_pos[1])
+            distance = self._manhattan_distance((self.grid_x, self.grid_y), pellet_pos)
             if distance < min_distance * 1.5:  # Give power pellets priority
                 min_distance = distance
                 nearest = pellet_pos
 
         return nearest
 
-    # Find a path to the target position using BFS
     def _find_path_to_target(self, maze, target):
+        """BFS pathfinding - keeping original for compatibility"""
         start = (self.grid_x, self.grid_y)
         if start == target:
             return [start]
@@ -177,55 +554,155 @@ class AIPlayer(PlayerBase):
         elif dy < 0:
             self.next_direction = "UP"
 
-    def _move_away_from_position(self, maze, position):
-        # Calculate opposite direction
-        dx = self.grid_x - position[0]
-        dy = self.grid_y - position[1]
-
-        # Prefer moving in the direction that increases distance
-        preferred_directions = []
-        if dx > 0:
-            preferred_directions.append("RIGHT")
-        elif dx < 0:
-            preferred_directions.append("LEFT")
-
-        if dy > 0:
-            preferred_directions.append("DOWN")
-        elif dy < 0:
-            preferred_directions.append("UP")
-
-        # Try preferred directions
-        for direction in preferred_directions:
-            dx, dy = DIRECTIONS[direction]
-            new_x = self.grid_x + dx
-            new_y = self.grid_y + dy
-            if maze.is_valid_position(new_x, new_y):
-                self.next_direction = direction
+    def _find_alternative_direction(self, maze):
+        """Find alternative direction when blocked, prioritizing the intended path"""
+        # If we have a target from our current AI behavior, try to move towards it
+        if hasattr(self, 'current_target') and self.current_target:
+            best_direction = self._get_best_direction_for_target(maze, self.current_target)
+            if best_direction:
+                self.next_direction = best_direction
                 return
 
-        # Fallback to simple AI
-        self._simple_ai(maze)
-
-    def _find_alternative_direction(self, maze):
         valid_directions = []
+        direction_priorities = {}
+
         for direction, (dx, dy) in DIRECTIONS.items():
             new_x = self.grid_x + dx
             new_y = self.grid_y + dy
             if maze.is_valid_position(new_x, new_y):
                 valid_directions.append(direction)
 
-        if valid_directions:
-            # Prefer any direction except the opposite of current
-            opposite = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
-            preferred = [d for d in valid_directions if d != opposite.get(self.direction)]
-            if preferred:
-                self.next_direction = random.choice(preferred)
-            else:
-                self.next_direction = random.choice(valid_directions)
+                # Priority scoring
+                priority = 0
 
-    def render(self, screen):
+                # Prefer the next_direction if it's valid
+                if direction == self.next_direction:
+                    priority += 100
+
+                # Avoid going backwards unless necessary
+                opposite = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
+                if direction == opposite.get(self.direction):
+                    priority -= 50
+
+                # Prefer continuing in same direction
+                if direction == self.direction:
+                    priority += 20
+
+                direction_priorities[direction] = priority
+
+        if valid_directions:
+            # Sort by priority and choose the best option
+            best_direction = max(valid_directions, key=lambda d: direction_priorities.get(d, 0))
+            self.next_direction = best_direction
+
+            # If we're stuck and need to go backwards, allow it
+            if not maze.is_valid_position(self.grid_x + DIRECTIONS[self.direction][0], self.grid_y + DIRECTIONS[self.direction][1]):
+                self.direction = best_direction
+
+    def _is_stuck(self, maze):
+        """Check if the AI player is stuck and needs immediate direction change"""
+        current_dx, current_dy = DIRECTIONS[self.direction]
+        target_x = self.grid_x + current_dx
+        target_y = self.grid_y + current_dy
+
+        # Check if current direction is blocked
+        if not maze.is_valid_position(target_x, target_y):
+            return True
+
+        # Check if we haven't moved for a while (movement_progress stuck)
+        if not self.moving and self.movement_progress <= 0.1:
+            return True
+
+        return False
+
+    def _get_best_direction_for_target(self, maze, target_pos):
+        """Get the best direction to move towards a target position"""
+        if not target_pos:
+            return None
+
+        target_x, target_y = target_pos
+        current_x, current_y = self.grid_x, self.grid_y
+
+        # Calculate direction preferences based on target
+        dx = target_x - current_x
+        dy = target_y - current_y
+
+        preferred_directions = []
+
+        # Prioritize horizontal movement if target is farther horizontally
+        if abs(dx) >= abs(dy):
+            if dx > 0:
+                preferred_directions.append("RIGHT")
+            elif dx < 0:
+                preferred_directions.append("LEFT")
+            if dy > 0:
+                preferred_directions.append("DOWN")
+            elif dy < 0:
+                preferred_directions.append("UP")
+        else:
+            # Prioritize vertical movement if target is farther vertically
+            if dy > 0:
+                preferred_directions.append("DOWN")
+            elif dy < 0:
+                preferred_directions.append("UP")
+            if dx > 0:
+                preferred_directions.append("RIGHT")
+            elif dx < 0:
+                preferred_directions.append("LEFT")
+
+        # Find the first valid direction from our preferences
+        for direction in preferred_directions:
+            test_dx, test_dy = DIRECTIONS[direction]
+            new_x = current_x + test_dx
+            new_y = current_y + test_dy
+            if maze.is_valid_position(new_x, new_y):
+                return direction
+
+        return None
+
+    def render(self, screen, debug_mode=False):
         if self.is_dead():
             return
+
+        # Draw pathfinding debug lines if debug mode is enabled
+        if debug_mode and self.path and len(self.path) > 1:
+            # Build path points: start at current position, then follow self.path
+            path_points = []
+            # Current position (with movement progress for smoothness)
+            px = self.pixel_x + CELL_SIZE // 2
+            py = self.pixel_y + CELL_SIZE // 2
+            path_points.append((int(px), int(py)))
+            for x, y in self.path:
+                path_points.append((x * CELL_SIZE + CELL_SIZE // 2, y * CELL_SIZE + CELL_SIZE // 2))
+
+            # Choose color based on AI type or state
+            if self.power_timer > 0:
+                line_color = (255, 255, 0)  # Yellow when powered
+            elif self.ai_type == "reflex_agent":
+                line_color = (0, 255, 0)  # Green for reflex agent
+            elif self.ai_type == "smart_hunter":
+                line_color = (0, 150, 255)  # Blue for smart hunter
+            elif self.ai_type == "competitive":
+                line_color = (255, 0, 255)  # Magenta for competitive
+            else:
+                line_color = (255, 165, 0)  # Orange for other types
+
+            line_width = 4 if self.power_timer > 0 else 3
+            pygame.draw.lines(screen, line_color, False, path_points, line_width)
+
+            # Draw circles at each node for clarity
+            for i, (x, y) in enumerate(self.path):
+                node_pos = (x * CELL_SIZE + CELL_SIZE // 2, y * CELL_SIZE + CELL_SIZE // 2)
+                pygame.draw.circle(screen, line_color, node_pos, 6 if i == len(self.path) - 1 else 4, 0)
+
+        # Draw current target if debug mode is enabled
+        if debug_mode and hasattr(self, 'current_target') and self.current_target:
+            target_x, target_y = self.current_target
+            target_pixel = (target_x * CELL_SIZE + CELL_SIZE // 2, target_y * CELL_SIZE + CELL_SIZE // 2)
+
+            # Draw target indicator
+            pygame.draw.circle(screen, (255, 255, 255), target_pixel, 8)
+            pygame.draw.circle(screen, (255, 0, 0), target_pixel, 6)
 
         sprite = self.sprite_manager.get_sprite(self.player_id, self.direction.lower())
 
@@ -238,11 +715,46 @@ class AIPlayer(PlayerBase):
         if should_render:
             if sprite:
                 render_y = self.pixel_y + self.bob_offset
+
+                # Add power mode visual effect
+                if self.power_timer > 0:
+                    # Create a glowing effect during power mode
+                    glow_surface = pygame.Surface((CELL_SIZE + 4, CELL_SIZE + 4))
+                    glow_surface.set_alpha(100)
+                    glow_color = YELLOW if self.power_timer > 60 else RED
+                    pygame.draw.circle(glow_surface, glow_color, (CELL_SIZE // 2 + 2, CELL_SIZE // 2 + 2), CELL_SIZE // 2 + 2)
+                    screen.blit(glow_surface, (self.pixel_x - 2, render_y - 2))
+
                 screen.blit(sprite, (self.pixel_x, render_y))
             else:
-                # Fallback rendering with invincibility effect
+                # Fallback rendering with enhanced effects
                 color = GREEN if self.player_id == "ai1" else ORANGE
                 if self.is_invincible:
                     # Make color lighter during invincibility
                     color = tuple(min(255, c + 100) for c in color)
+                elif self.power_timer > 0:
+                    # Power mode coloring
+                    color = YELLOW if self.power_timer > 60 else RED
+
                 pygame.draw.circle(screen, color, (int(self.pixel_x + CELL_SIZE // 2), int(self.pixel_y + CELL_SIZE // 2)), CELL_SIZE // 2 - 2)
+
+        # Debug info text
+        if debug_mode:
+            font = pygame.font.Font(None, 24)
+            debug_info = []
+
+            # AI type and state
+            debug_info.append(f"AI: {self.ai_type}")
+
+            # Current target type
+            if hasattr(self, 'current_target') and self.current_target:
+                debug_info.append(f"Target: {self.current_target}")
+
+            # Power state
+            if self.power_timer > 0:
+                debug_info.append(f"Power: {self.power_timer // 60 + 1}s")
+
+            # Render debug text
+            for i, text in enumerate(debug_info):
+                text_surface = font.render(text, True, (255, 255, 255))
+                screen.blit(text_surface, (self.pixel_x, self.pixel_y - 30 - (i * 20)))

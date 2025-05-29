@@ -6,6 +6,7 @@ import os
 from constants import *
 from core.sprite_manager import SpriteManager
 from core.maze import Maze
+from core.intro import CinematicIntro
 from ui.game_ui import GameUI
 from core.music import OneShotMusicManager
 from maze_layout import POSITIONS, MAZE_INFO  # Import position definitions
@@ -39,6 +40,7 @@ class PacmanGame:
         self.maze = Maze()
         self.ui = GameUI(font_path=font_path)
         self.music = self._initialize_music(music_file, volume)
+        self.intro = CinematicIntro(SCREEN_WIDTH, SCREEN_HEIGHT)
 
         # Game state
         self.running = True
@@ -74,7 +76,7 @@ class PacmanGame:
 
         # Player 2 (AI)
         self.player2 = AIPlayer(
-            player_id="ai1", start_x=player2_pos[0], start_y=player2_pos[1], sprite_manager=self.sprite_manager, ai_type="pellet_hunter"
+            player_id="ai1", start_x=player2_pos[0], start_y=player2_pos[1], sprite_manager=self.sprite_manager, ai_type="smart_hunter"
         )
 
         # Inky Ghost
@@ -156,7 +158,8 @@ class PacmanGame:
                     player.update(self.maze)
                 else:
                     human_pos = self.player1.get_position() if not self.player1.is_dead() else None
-                    player.update(self.maze, human_pos)
+                    ghost_pos = [self.inky_ghost.get_position()] if not self.inky_ghost.is_dead() else []
+                    player.update(self.maze, human_pos, ghost_pos)
 
         # Update Inky Ghost
         alive_positions = [p.get_position() if not p.is_dead() else None for p in players]
@@ -212,7 +215,7 @@ class PacmanGame:
         if not self.player1.is_dead():
             self.player1.render(maze_surface)
         if not self.player2.is_dead():
-            self.player2.render(maze_surface)
+            self.player2.render(maze_surface, True)
 
         # Render ghost on the maze surface
         self.inky_ghost.render(maze_surface, self.maze, True)
@@ -309,6 +312,19 @@ class PacmanGame:
         self._start_music()
 
     def run(self):
+        # -- Intro scene --
+        intro_done = False
+        while not intro_done:
+            dt = self.clock.tick(FPS) / 1000
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+            self.intro.update()
+            self.intro.render(self.screen)
+            pygame.display.flip()
+            intro_done = self.intro.is_complete()
+
         while self.running:
             self.handle_events()
             self.update()
@@ -321,7 +337,7 @@ class PacmanGame:
 
 
 if __name__ == "__main__":
-    music_file = os.path.join("music", "A801_AA - Sanaas(1).mp3")
+    music_file = os.path.join("music", "Control_wishes.mp3")
     font_path = os.path.join("fonts", "pixelFont-7-8x14-sproutLands.ttf")
     game = PacmanGame(music_file=music_file, volume=0.5, font_path=font_path)
     game.run()
