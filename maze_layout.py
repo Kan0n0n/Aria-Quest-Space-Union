@@ -1,25 +1,25 @@
 MAZE_LAYOUT = [
     # Row 0 - Top border
     [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-    # Row 1
-    [3, 2, 1, 1, 1, 3, 1, 1, 3, 1, 3, 1, 1, 3, 1, 1, 2, 3],
-    # Row 2
-    [3, 1, 3, 3, 1, 3, 1, 1, 3, 1, 3, 1, 1, 3, 1, 3, 1, 3],
+    # Row 1 
+    [3, 2, 1, 1, 1, 1, 1, 1, 3, 1, 3, 1, 1, 1, 1, 1, 0, 3],
+    # Row 2 
+    [3, 1, 3, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 3, 1, 1, 1, 3],
     # Row 3
     [3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3],
     # Row 4
-    [3, 1, 3, 1, 3, 3, 1, 3, 3, 3, 3, 3, 1, 3, 3, 1, 1, 3],
-    # Row 5 - Ghost spawn area
+    [3, 1, 1, 1, 3, 1, 1, 3, 3, 3, 3, 3, 1, 1, 3, 1, 1, 3],
+    # Row 5
     [3, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 3],
-    # Row 6 - Center area
-    [3, 1, 3, 1, 3, 3, 1, 3, 0, 0, 0, 3, 1, 3, 3, 1, 1, 3],
-    # Row 7
+    # Row 6
+    [3, 1, 1, 1, 3, 1, 1, 3, 0, 0, 0, 3, 1, 1, 3, 1, 1, 3],
+    # Row 7 
     [3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3],
-    # Row 8
-    [3, 1, 3, 3, 1, 3, 1, 1, 3, 1, 3, 1, 1, 3, 1, 3, 1, 3],
-    # Row 9
-    [3, 2, 1, 1, 1, 3, 1, 1, 3, 1, 3, 1, 1, 3, 1, 1, 2, 3],
-    # Row 10 - Bottom border
+    # Row 8 
+    [3, 1, 3, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 3, 1, 1, 1, 3],
+    # Row 9 
+    [3, 0, 1, 1, 1, 1, 1, 1, 3, 1, 3, 1, 1, 1, 1, 1, 0, 3],
+    # Row 10 
     [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
 ]
 
@@ -27,19 +27,12 @@ MAZE_LAYOUT = [
 POSITIONS = {
     # Player starting positions
     'PLAYER1_START': (1, 1),  # Top-left corner
-    'PLAYER2_START': (17, 9),  # Bottom-right corner
+    'PLAYER2_START': (16, 9),  # Bottom-right corner
     # Ghost starting positions
     'INKY_GHOST_START': (9, 5),  # Center area
-    # Inky Ghost scatter positions (corners and strategic points)
-    'INKY_SCATTER_POINTS': [(1, 1), (4, 1), (4, 3), (1, 3)],  # Top-left corner  # Top-left corridor  # Top-left corridor  # Top-left corridor
-    # Alternative spawn points (for respawning or multiple ghosts)
-    'GHOST_SPAWN_AREA': {'center': (9, 5), 'left': (8, 5), 'right': (10, 5), 'top': (9, 4), 'bottom': (9, 6)},
-    # Power pellet positions (corners for strategic gameplay)
-    'POWER_PELLETS': [(1, 1), (17, 1), (1, 9), (17, 9)],
-    # Safe zones (areas near starting positions)
-    'SAFE_ZONES': {'player1': [(1, 1), (2, 1), (1, 2), (2, 2)], 'player2': [(17, 9), (16, 9), (17, 8), (16, 8)]},
-    # Strategic choke points
-    'CHOKE_POINTS': [(9, 3), (9, 7), (5, 5), (13, 5)],  # Top center corridor  # Bottom center corridor  # Left center  # Right center
+    # Inky Ghost scatter point (one single point outside the maze on the right)
+    'INKY_GHOST_SCATTER_POINT': (18, 5),  # Right side of the maze
+    'GHOST_RESPAWN_POINT': {'INKY': (9, 5)},  # Center area for Inky
 }
 
 # Maze metadata

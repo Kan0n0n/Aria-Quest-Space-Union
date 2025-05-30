@@ -2,6 +2,7 @@ import pygame
 import random
 from collections import deque
 from constants import *
+from benchmark_stuff import AIBenchmark
 from entities.player_base import PlayerBase
 import math
 import heapq
@@ -25,6 +26,181 @@ class AIPlayer(PlayerBase):
         self.danger_zones = set()  # Positions to avoid
         self.exploration_bonus = {}  # Bonus for exploring new areas
 
+        # NEW: Anti-stuck mechanism
+        self.recent_positions = deque(maxlen=10)  # Track last 10 positions
+        self.stuck_counter = 0
+        self.last_position = (start_x, start_y)
+
+        # Enhanced power pellet management
+        self.power_mode_active = False
+        self.power_pellet_eaten_time = 0
+        self.ghost_hunt_targets = []
+        self.power_mode_strategy = "aggressive"  # aggressive, cautious, balanced
+
+        self.benchmark = None
+        self.benchmark_enabled = False  # Enable benchmarking if needed
+
+        # Algorithm comparison data
+        self.algorithm_stats = {
+            'bfs_steps': 0,
+            'dfs_steps': 0,
+            'astar_steps': 0,
+            'ucs_steps': 0,
+            'ghosts_eaten': 0,
+            'deaths': 0,
+            'power_pellets_used_effectively': 0,
+        }
+
+    def set_benchmark(self, benchmark):
+        """Set benchmark instance"""
+        self.benchmark = benchmark
+        self.benchmark_enabled = True
+
+    def change_algorithm(self, new_ai_type):
+        """Change AI algorithm type"""
+        old_type = self.ai_type
+        self.ai_type = new_ai_type
+
+        # Reset some state when changing algorithms
+        self.path = []
+        self.current_target = None
+        self.decision_timer = 0
+
+        print(f"AI algorithm changed from {old_type} to {new_ai_type}")
+        return old_type
+
+    def _benchmark_algorithm(self, algorithm_name, maze, start, target):
+        """Benchmark a specific algorithm"""
+        if not self.benchmark_enabled or not self.benchmark:
+            return []
+
+        self.benchmark.start_benchmark(algorithm_name, target, start)
+
+        # Run the algorithm
+        if algorithm_name == "bfs":
+            path = self._breadth_first_search(maze, start, target)
+        elif algorithm_name == "dfs":
+            path = self._depth_first_search(maze, start, target)
+        elif algorithm_name == "astar":
+            path = self._a_star_search(maze, start, target)
+        elif algorithm_name == "ucs":
+            path = self._uniform_cost_search(maze, start, target)
+        else:
+            path = []
+
+        # Record results
+        self.benchmark.end_benchmark(path_found=len(path) > 0, path_length=len(path) if path else 0)
+
+        return path
+
+    def run_comprehensive_benchmark(self, maze, num_tests=10):
+        """Run comprehensive benchmark on all algorithms"""
+        if not self.benchmark_enabled:
+            return
+
+        algorithms = ["bfs", "dfs", "astar", "ucs"]
+
+        # Get random targets for testing
+        all_pellets = list(maze.pellets) + list(maze.power_pellets)
+        if len(all_pellets) < num_tests:
+            targets = all_pellets * (num_tests // len(all_pellets) + 1)
+        else:
+            targets = all_pellets[:num_tests]
+
+        start_pos = (self.grid_x, self.grid_y)
+
+        print(f"Running comprehensive benchmark with {num_tests} tests per algorithm...")
+
+        for algorithm in algorithms:
+            print(f"Testing {algorithm.upper()}...")
+            for i, target in enumerate(targets[:num_tests]):
+                self._benchmark_algorithm(algorithm, maze, start_pos, target)
+
+        print("Benchmark completed!")
+
+    def manage_power_pellet_state(self, maze, ghosts_positions):
+        """Enhanced power pellet state management"""
+        if self.power_timer > 0:
+            self.power_mode_active = True
+            time_remaining = self.power_timer
+
+            # Strategy based on remaining time
+            if time_remaining > 180:  # More than 3 seconds
+                self.power_mode_strategy = "aggressive"
+            elif time_remaining > 60:  # 1-3 seconds
+                self.power_mode_strategy = "balanced"
+            else:  # Less than 1 second
+                self.power_mode_strategy = "cautious"
+
+            # Hunt ghosts if strategy allows
+            if self.power_mode_strategy in ["aggressive", "balanced"]:
+                self._hunt_ghosts_intelligently(maze, ghosts_positions)
+            else:
+                # Retreat when time is almost up
+                self._retreat_from_ghosts(maze, ghosts_positions)
+        else:
+            if self.power_mode_active:
+                # Just exited power mode
+                self.power_mode_active = False
+                self._evaluate_power_pellet_effectiveness()
+
+    def _hunt_ghosts_intelligently(self, maze, ghosts_positions):
+        """Hunt ghosts with intelligent strategy during power mode"""
+        if not ghosts_positions:
+            return
+
+        # Find the best ghost to hunt
+        best_ghost = None
+        best_score = -1
+
+        for ghost_pos in ghosts_positions:
+            distance = self._manhattan_distance((self.grid_x, self.grid_y), ghost_pos)
+            time_to_reach = distance  # Simplified estimation
+
+            # Score based on distance and time remaining
+            if time_to_reach < self.power_timer // 20:  # Can reach in time
+                score = 100 - distance  # Prefer closer ghosts
+                if score > best_score:
+                    best_score = score
+                    best_ghost = ghost_pos
+
+        if best_ghost:
+            self.current_target = best_ghost
+            path = self._a_star_search(maze, (self.grid_x, self.grid_y), best_ghost)
+            if path and len(path) > 1:
+                self.path = path
+                next_pos = path[1]
+                self._set_direction_to_position(next_pos)
+
+    def _retreat_from_ghosts(self, maze, ghosts_positions):
+        """Retreat strategy when power time is running out"""
+        if not ghosts_positions:
+            return
+
+        # Find safest direction - away from all ghosts
+        best_direction = None
+        best_distance = -1
+
+        for direction, (dx, dy) in DIRECTIONS.items():
+            new_x = self.grid_x + dx
+            new_y = self.grid_y + dy
+
+            if maze.is_valid_position(new_x, new_y):
+                min_ghost_distance = min(self._manhattan_distance((new_x, new_y), ghost_pos) for ghost_pos in ghosts_positions)
+
+                if min_ghost_distance > best_distance:
+                    best_distance = min_ghost_distance
+                    best_direction = direction
+
+        if best_direction:
+            self.next_direction = best_direction
+
+    def _evaluate_power_pellet_effectiveness(self):
+        """Evaluate how effectively the power pellet was used"""
+        # This would track if ghosts were eaten during power mode
+        # For now, just increment the counter
+        self.algorithm_stats['power_pellets_used_effectively'] += 1
+
     def update(self, maze, player_position=None, ghosts_positions=None):
         # Use base class methods
         self.update_invincibility()
@@ -33,6 +209,26 @@ class AIPlayer(PlayerBase):
         # Update power timer
         if self.power_timer > 0:
             self.power_timer -= 1
+
+        current_pos = (self.grid_x, self.grid_y)
+        if current_pos != self.last_position:
+            self.recent_positions.append(self.last_position)
+            self.last_position = current_pos
+            self.stuck_counter = 0
+        else:
+            self.stuck_counter += 1
+
+        if self.stuck_counter > 30:  # If stuck for too long
+            valid_directions = []
+            for direction, (dx, dy) in DIRECTIONS.items():
+                new_x = self.grid_x + dx
+                new_y = self.grid_y + dy
+                if maze.is_valid_position(new_x, new_y):
+                    valid_directions.append(direction)
+
+            if valid_directions:
+                self.next_direction = random.choice(valid_directions)
+                self.stuck_counter = 0
 
         self.decision_timer += 1
 
@@ -138,46 +334,96 @@ class AIPlayer(PlayerBase):
         return situation
 
     def _reflex_agent_behavior(self, maze, situation):
-        """Intelligent reflex agent behavior"""
-        # Priority 1: Avoid immediate danger if no power
-        if not situation['has_power'] and situation['ghost_distances']:
-            min_ghost_distance = min(dist for _, dist in situation['ghost_distances'])
-            if min_ghost_distance <= 5:
-                self.current_target = None  # Clear target when escaping
-                self._escape_from_ghosts(maze, situation['ghost_distances'])
-                return
+        # Get current state evaluation
+        state_evaluation = self._evaluate_game_state(maze, situation)
 
-        # Priority 2: Hunt ghosts if powered and time is sufficient
-        if situation['has_power'] and situation['power_time_left'] > 60:
-            nearest_ghost = self._find_nearest_ghost(situation['ghost_distances'])
-            if nearest_ghost and nearest_ghost[1] <= 8:
-                self.current_target = nearest_ghost[0]
-                self._hunt_target(maze, nearest_ghost[0])
-                return
+        # Priority 1: Immediate danger avoidance
+        if state_evaluation['immediate_danger'] and not situation['has_power']:
+            self.current_target = None
+            self._escape_from_ghosts(maze, situation['ghost_distances'])
+            return
 
-        # Priority 3: Get power pellet if ghosts are nearby and no power
-        if (
-            not situation['has_power']
-            and situation['nearest_power_pellet']
-            and situation['ghost_distances']
-            and min(dist for _, dist in situation['ghost_distances']) <= 6
-        ):
+        # Priority 2: Power pellet strategy
+        if self._should_get_power_pellet(situation, state_evaluation):
             self.current_target = situation['nearest_power_pellet']
             self._hunt_target(maze, situation['nearest_power_pellet'])
             return
 
-        # Priority 4: Compete with player if close
-        if situation['player_distance'] <= 5:
+        # Priority 3: Ghost hunting during power mode
+        if situation['has_power'] and self._should_hunt_ghosts(situation, state_evaluation):
+            self.manage_power_pellet_state(maze, [pos for pos, _ in situation['ghost_distances']])
+            return
+
+        # Priority 4: Competitive behavior
+        if self._should_compete_with_player(situation, state_evaluation):
             self._competitive_behavior(maze, situation)
             return
 
-        # Priority 5: Hunt pellets efficiently
+        # Priority 5: Food collection strategy
         if situation['nearest_pellet']:
             self.current_target = situation['nearest_pellet']
             self._hunt_target(maze, situation['nearest_pellet'])
         else:
-            self.current_target = None
-            self._enhanced_simple_ai(maze, situation)
+            # Exploration or special problems
+            self._handle_special_objectives(maze)
+
+    def _evaluate_game_state(self, maze, situation):
+        """Comprehensive game state evaluation"""
+        evaluation = {
+            'immediate_danger': False,
+            'ghost_threat_level': 0,
+            'food_scarcity': len(maze.pellets) / max(1, maze.initial_pellet_count) if hasattr(maze, 'initial_pellet_count') else 1,
+            'power_opportunity': False,
+            'competition_pressure': False,
+        }
+
+        # Evaluate ghost threat
+        if situation['ghost_distances']:
+            min_ghost_dist = min(dist for _, dist in situation['ghost_distances'])
+            evaluation['immediate_danger'] = min_ghost_dist <= 2
+            evaluation['ghost_threat_level'] = max(0, 5 - min_ghost_dist) / 5
+
+        # Evaluate power pellet opportunity
+        if situation['nearest_power_pellet'] and situation['ghost_distances']:
+            power_dist = self._manhattan_distance((self.grid_x, self.grid_y), situation['nearest_power_pellet'])
+            min_ghost_dist = min(dist for _, dist in situation['ghost_distances'])
+            evaluation['power_opportunity'] = power_dist < min_ghost_dist
+
+        return evaluation
+
+    def _should_get_power_pellet(self, situation, evaluation):
+        """Decide whether to prioritize getting a power pellet"""
+        if not situation['nearest_power_pellet']:
+            return False
+
+        # Get power pellet if ghosts are nearby and we can reach it safely
+        return evaluation['ghost_threat_level'] > 0.3 and evaluation['power_opportunity']
+
+    def _should_hunt_ghosts(self, situation, evaluation):
+        """Decide whether to hunt ghosts during power mode"""
+        if not situation['has_power']:
+            return False
+
+        # Hunt if we have enough time and ghosts are reachable
+        return situation['power_time_left'] > 60 and situation['ghost_distances'] and min(dist for _, dist in situation['ghost_distances']) <= 8
+
+    def _should_compete_with_player(self, situation, evaluation):
+        """Decide whether to compete directly with player"""
+        return situation['player_distance'] <= 5 and situation['player_distance'] != float('inf') and not evaluation['immediate_danger']
+
+    def _handle_special_objectives(self, maze):
+        """Handle special objectives when no regular food is available"""
+        # Try corners problem
+        corners_path = self.solve_corners_problem(maze)
+        if corners_path:
+            self.path = corners_path
+            if len(corners_path) > 1:
+                next_pos = corners_path[1]
+                self._set_direction_to_position(next_pos)
+            return
+
+        # Default exploration
+        self._enhanced_simple_ai(maze, {})
 
     def _smart_hunter_ai(self, maze, situation):
         """Advanced hunting AI using A* pathfinding"""
@@ -415,11 +661,11 @@ class AIPlayer(PlayerBase):
 
                 # Prefer continuing in same direction
                 if direction == self.direction:
-                    score += 2
+                    score += 1
 
                 # Avoid dead ends
                 neighbors = len([n for n in maze.get_neighbors(new_x, new_y)])
-                score += neighbors
+                score += neighbors * 2
 
                 # NEW: Penalize directions that lead toward ghosts
                 if hasattr(situation, 'ghost_distances') and situation.get('ghost_distances'):
@@ -432,15 +678,36 @@ class AIPlayer(PlayerBase):
                 if (new_x, new_y) in self.exploration_bonus:
                     score += self.exploration_bonus.get((new_x, new_y), 0)
 
+                # NEW: Anti-stuck mechanism - penalize going back to recent positions
+                if hasattr(self, 'recent_positions'):
+                    if (new_x, new_y) in self.recent_positions:
+                        score -= 5  # Penalty for revisiting recent positions
+
+                # NEW: Bonus for directions leading toward pellets
+                if situation.get('nearest_pellet'):
+                    pellet_pos = situation['nearest_pellet']
+                    current_dist = self._manhattan_distance((self.grid_x, self.grid_y), pellet_pos)
+                    new_dist = self._manhattan_distance((new_x, new_y), pellet_pos)
+                    if new_dist < current_dist:
+                        score += 3  # Bonus for getting closer to pellets
+
                 direction_scores[direction] = score
 
         if valid_directions:
             # Choose direction with highest score, with some randomness
-            if random.random() < 0.8:  # 80% optimal, 20% random
+            if random.random() < 0.85:  # 80% optimal, 20% random
                 best_direction = max(valid_directions, key=lambda d: direction_scores.get(d, 0))
                 self.next_direction = best_direction
             else:
                 self.next_direction = random.choice(valid_directions)
+        else:
+            # Emergency fallback - try any direction
+            for direction, (dx, dy) in DIRECTIONS.items():
+                new_x = self.grid_x + dx
+                new_y = self.grid_y + dy
+                if maze.is_valid_position(new_x, new_y):
+                    self.next_direction = direction
+                    break
 
     # Helper methods
     def _manhattan_distance(self, pos1, pos2):
@@ -758,3 +1025,210 @@ class AIPlayer(PlayerBase):
             for i, text in enumerate(debug_info):
                 text_surface = font.render(text, True, (255, 255, 255))
                 screen.blit(text_surface, (self.pixel_x, self.pixel_y - 30 - (i * 20)))
+
+    def _depth_first_search(self, maze, start, goal):
+        """DFS pathfinding algorithm for comparison"""
+        stack = [(start, [start])]
+        visited = set()
+
+        while stack:
+            current, path = stack.pop()
+
+            if current == goal:
+                return path
+
+            if current in visited:
+                continue
+
+            visited.add(current)
+
+            for next_x, next_y, _ in maze.get_neighbors(current[0], current[1]):
+                next_pos = (next_x, next_y)
+                if next_pos not in visited:
+                    stack.append((next_pos, path + [next_pos]))
+
+        return []
+
+    def _breadth_first_search(self, maze, start, goal):
+        """BFS pathfinding algorithm - enhanced version of existing method"""
+        from collections import deque
+
+        queue = deque([(start, [start])])
+        visited = {start}
+
+        while queue:
+            current, path = queue.popleft()
+
+            if current == goal:
+                return path
+
+            for next_x, next_y, _ in maze.get_neighbors(current[0], current[1]):
+                next_pos = (next_x, next_y)
+                if next_pos not in visited:
+                    visited.add(next_pos)
+                    queue.append((next_pos, path + [next_pos]))
+
+        return []
+
+    def _uniform_cost_search(self, maze, start, goal, ghost_distances=None):
+        """UCS pathfinding with ghost avoidance costs"""
+        import heapq
+
+        def get_cost(pos):
+            base_cost = 1
+            if ghost_distances:
+                for ghost_pos, _ in ghost_distances:
+                    dist = self._manhattan_distance(pos, ghost_pos)
+                    if dist <= 2:
+                        base_cost += (3 - dist) * 10  # High cost near ghosts
+            return base_cost
+
+        priority_queue = [(0, start, [start])]
+        visited = {}
+
+        while priority_queue:
+            cost, current, path = heapq.heappop(priority_queue)
+
+            if current in visited and visited[current] <= cost:
+                continue
+
+            visited[current] = cost
+
+            if current == goal:
+                return path
+
+            for next_x, next_y, _ in maze.get_neighbors(current[0], current[1]):
+                next_pos = (next_x, next_y)
+                new_cost = cost + get_cost(next_pos)
+
+                if next_pos not in visited or visited[next_pos] > new_cost:
+                    heapq.heappush(priority_queue, (new_cost, next_pos, path + [next_pos]))
+
+        return []
+
+    def solve_corners_problem(self, maze):
+        """Solve corners problem - visit all 4 corners of the maze"""
+        corners = [
+            (1, 1),  # Top-left
+            (maze.width - 2, 1),  # Top-right
+            (1, maze.height - 2),  # Bottom-left
+            (maze.width - 2, maze.height - 2),  # Bottom-right
+        ]
+
+        # Find actual valid corners
+        valid_corners = []
+        for corner in corners:
+            if maze.is_valid_position(corner[0], corner[1]):
+                valid_corners.append(corner)
+
+        if not valid_corners:
+            return []
+
+        # Use nearest neighbor approach to visit all corners
+        current_pos = (self.grid_x, self.grid_y)
+        full_path = []
+        remaining_corners = valid_corners.copy()
+
+        while remaining_corners:
+            # Find nearest corner
+            nearest_corner = min(remaining_corners, key=lambda c: self._manhattan_distance(current_pos, c))
+
+            # Find path to nearest corner
+            path = self._a_star_search(maze, current_pos, nearest_corner)
+            if path:
+                full_path.extend(path[1:] if full_path else path)
+                current_pos = nearest_corner
+                remaining_corners.remove(nearest_corner)
+            else:
+                break
+
+        return full_path
+
+    def solve_food_search_problem(self, maze):
+        """Find optimal path to collect all food"""
+        all_food = list(maze.pellets) + list(maze.power_pellets)
+        if not all_food:
+            return []
+
+        # Use a simplified TSP approach with nearest neighbor
+        current_pos = (self.grid_x, self.grid_y)
+        full_path = []
+        remaining_food = all_food.copy()
+
+        while remaining_food:
+            # Find nearest food
+            nearest_food = min(remaining_food, key=lambda f: self._manhattan_distance(current_pos, f))
+
+            # Find path to nearest food
+            path = self._a_star_search(maze, current_pos, nearest_food)
+            if path:
+                full_path.extend(path[1:] if full_path else path)
+                current_pos = nearest_food
+                remaining_food.remove(nearest_food)
+            else:
+                # Remove unreachable food
+                remaining_food.remove(nearest_food)
+
+        return full_path
+
+    def find_path_to_closest_dot(self, maze):
+        """Find path to the closest dot using different algorithms"""
+        closest_dot = self._find_nearest_pellet(maze)
+        if not closest_dot:
+            return []
+
+        # Try different algorithms based on AI type
+        if self.ai_type == "smart_hunter":
+            return self._a_star_search(maze, (self.grid_x, self.grid_y), closest_dot)
+        elif self.ai_type == "simple_bfs":
+            return self._breadth_first_search(maze, (self.grid_x, self.grid_y), closest_dot)
+        elif self.ai_type == "simple_dfs":
+            return self._depth_first_search(maze, (self.grid_x, self.grid_y), closest_dot)
+        else:
+            return self._find_path_to_target(maze, closest_dot)
+
+    def compare_algorithms(self, maze, target):
+        """Compare different pathfinding algorithms"""
+        start_pos = (self.grid_x, self.grid_y)
+        results = {}
+
+        # Test BFS
+        import time
+
+        start_time = time.time()
+        bfs_path = self._breadth_first_search(maze, start_pos, target)
+        bfs_time = time.time() - start_time
+        results['bfs'] = {'path_length': len(bfs_path), 'computation_time': bfs_time, 'path': bfs_path}
+
+        # Test DFS
+        start_time = time.time()
+        dfs_path = self._depth_first_search(maze, start_pos, target)
+        dfs_time = time.time() - start_time
+        results['dfs'] = {'path_length': len(dfs_path), 'computation_time': dfs_time, 'path': dfs_path}
+
+        # Test A*
+        start_time = time.time()
+        astar_path = self._a_star_search(maze, start_pos, target)
+        astar_time = time.time() - start_time
+        results['astar'] = {'path_length': len(astar_path), 'computation_time': astar_time, 'path': astar_path}
+
+        # Test UCS
+        start_time = time.time()
+        ucs_path = self._uniform_cost_search(maze, start_pos, target)
+        ucs_time = time.time() - start_time
+        results['ucs'] = {'path_length': len(ucs_path), 'computation_time': ucs_time, 'path': ucs_path}
+
+        return results
+
+    def get_algorithm_performance_stats(self):
+        """Get performance statistics for algorithm comparison"""
+        return self.algorithm_stats.copy()
+
+    def reset_position(self, x, y):
+        """Reset AI player position"""
+        self.grid_x = x
+        self.grid_y = y
+        self.pixel_x = x * CELL_SIZE
+        self.pixel_y = y * CELL_SIZE
+        self.movement_progress = 0.0
+        self.direction = "UP"

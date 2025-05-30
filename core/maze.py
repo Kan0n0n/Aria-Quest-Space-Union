@@ -86,7 +86,7 @@ class Maze:
         if x < 0 or x >= self.width or y < 0 or y >= self.height:
             return True
         # Walls are types 3, 4, 5, 6, 7, 8
-        return self.layout[y][x] in [3, 4, 5, 6, 7, 8]
+        return self.layout[y][x] in [3]
 
     def is_valid_position(self, x, y):
         return not self.is_wall(x, y)
@@ -171,3 +171,6 @@ class Maze:
             # Center the scaled image
             scaled_rect = scaled_power_pellet.get_rect(center=(center_x, center_y))
             screen.blit(scaled_power_pellet, scaled_rect)
+
+    def get_remaining_food_count(self):
+        return len(self.pellets) + len(self.power_pellets)

@@ -21,6 +21,9 @@ class Player(PlayerBase):
         self.update_invincibility()
         self.update_animation()
 
+        if self.power_timer > 0:
+            self.power_timer -= 1
+
         if self.movement_progress <= 0.1:
             dx, dy = DIRECTIONS[self.next_direction]
             new_x = self.grid_x + dx
@@ -40,6 +43,14 @@ class Player(PlayerBase):
                 self.grid_y = target_y
                 self.movement_progress = 0.0
                 points = maze.collect_pellet(self.grid_x, self.grid_y)
+                if points > 0:
+                    if points == POWER_PELLET_POINTS:
+                        self.is_invincible = True
+                        self.invincibility_timer = self.invincibility_duration
+                        self.invincibility_blink_timer = 0.0
+                        self.power_timer = self.power_up_duration
+                    else:
+                        self.invincibility_blink_timer = 0.0
                 self.score += points
         else:
             self.moving = False
@@ -47,31 +58,31 @@ class Player(PlayerBase):
 
         self._update_pixel_position()
 
-    def _update_pixel_position(self):
-        base_x = self.grid_x * CELL_SIZE
-        base_y = self.grid_y * CELL_SIZE
-        if self.moving:
-            dx, dy = DIRECTIONS[self.direction]
-            offset_x = dx * CELL_SIZE * self.movement_progress
-            offset_y = dy * CELL_SIZE * self.movement_progress
-            self.pixel_x = base_x + offset_x
-            self.pixel_y = base_y + offset_y
-        else:
-            self.pixel_x = base_x
-            self.pixel_y = base_y
-
-    def render(self, screen):
+    def render(self, screen, debug=False):
         if self.is_dead():
             return
 
         sprite = self.sprite_manager.get_sprite(self.player_id, self.direction.lower())
         should_render = True
-        if self.is_invincible:
-            should_render = (self.invincibility_blink_timer // 10) % 2 == 0
+
+        if self.is_invincible and self.power_timer <= 0:
+            self.invincibility_blink_timer += 1
+            if (self.invincibility_blink_timer // 10) % 2 == 0:
+                should_render = False
 
         if should_render:
             if sprite:
                 render_y = self.pixel_y + self.bob_offset
+
+                # Add power mode visual effect
+                if self.power_timer > 0:
+                    # Create a glowing effect during power mode
+                    glow_surface = pygame.Surface((CELL_SIZE + 4, CELL_SIZE + 4))
+                    glow_surface.set_alpha(100)
+                    glow_color = YELLOW if self.power_timer > 60 else RED
+                    pygame.draw.circle(glow_surface, glow_color, (CELL_SIZE // 2 + 2, CELL_SIZE // 2 + 2), CELL_SIZE // 2 + 2)
+                    screen.blit(glow_surface, (self.pixel_x - 2, render_y - 2))
+
                 screen.blit(sprite, (self.pixel_x, render_y))
             else:
                 color = YELLOW if self.player_id == "player1" else RED
@@ -93,3 +104,7 @@ class Player(PlayerBase):
             self.is_invincible = False
             self.invincibility_timer = 0.0
             self.invincibility_blink_timer = 0.0
+
+    def reset_position_with_score(self, x, y, score):
+        self.reset_position(x, y)
+        self.score = score

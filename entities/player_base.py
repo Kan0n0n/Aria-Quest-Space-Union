@@ -22,6 +22,9 @@ class PlayerBase:
         self.invincibility_duration = 180
         self.invincibility_blink_timer = 0.0
 
+        self.power_timer = 0.0
+        self.power_up_duration = 1000
+
         # animations
         self.animation_timer = 0.0
         self.bob_offset = 0.0
@@ -35,6 +38,9 @@ class PlayerBase:
                 self.invincibility_blink_timer = 0.0
             return True
         return False
+
+    def is_powered_up(self):
+        return self.power_timer > 0
 
     def is_dead(self):
         return self.health <= 0
@@ -102,3 +108,21 @@ class PlayerBase:
         else:
             self.pixel_x = base_x
             self.pixel_y = base_y
+
+    def check_ghost_collision(self, ghost_position):
+        if not ghost_position:
+            return False
+
+        ghost_x, ghost_y = ghost_position
+        distance = ((self.grid_x - ghost_x) ** 2 + (self.grid_y - ghost_y) ** 2) ** 0.5
+
+        if distance <= 0.8:  # Close enough for collision
+            if self.power_timer > 0:
+                # Player is powered up - hunt the ghost
+                self.score += 200
+                print(f"Player {self.player_id} caught a ghost! +200 points")
+                return "caught_ghost"  # Return special value to indicate ghost was caught
+            else:
+                # Player is not powered up - take damage
+                return self.take_damage()
+        return False

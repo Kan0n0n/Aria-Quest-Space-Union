@@ -12,6 +12,7 @@ class InkyGhost:
         self.grid_y = start_y
         self.pixel_x = start_x * CELL_SIZE
         self.pixel_y = start_y * CELL_SIZE
+        self.target_grid_x = (start_x, start_y)  # Target position for movement
         self.direction = "LEFT"
         self.next_direction = "LEFT"
         self.speed = GHOST_SPEED
@@ -23,23 +24,20 @@ class InkyGhost:
         self.player_id = player_id
         self.can_chase = True
         self.dead = False
+        self.last_grid_pos = None  # Last grid position for movement history
 
         # Animation properties
         self.animation_timer = 0
         self.bob_offset = 0
 
-        # A* pathfinding
-        self.path = []
-        self.current_path_index = 0
+        # A* pathfinding variables
+        self.current_path = []  # Stores the planned path to destination
+        self.path_recalculation_timer = 0  # Timer to periodically recalculate path
+        self.path_recalculation_interval = 30  # Recalculate every 0.5 seconds (30 frames at 60 FPS)
 
         # Grid-based movement history for visual trail
         self.movement_history = []
         self.stuck_counter = 0
-
-        # Random movement after catching player
-        self.random_mode = False
-        self.random_timer = 0
-        self.random_duration = 180  # 3 seconds at 60 FPS
 
         # Catch detection
         self.catch_distance = 0.8  # How close to consider a "catch"
@@ -52,409 +50,405 @@ class InkyGhost:
         # Food tracking for enraged mode
         self.total_food_count = 0  # Will be set by maze
         self.is_enraged = False  # Triggered when 80% food eaten
-        self.enraged_speed_multiplier = 1.5  # 60% speed increase when enraged
+        self.enraged_speed_multiplier = 2  # 60% speed increase when enraged
 
-        # Improved scatter behavior using maze layout positions
-        self.scatter_points = self._get_scatter_points_from_maze()
-        self.current_scatter_index = 0
-        self.scatter_direction = 1  # 1 for forward, -1 for backward
-
-        print(f"Inky Ghost initialized with {len(self.scatter_points)} scatter points from maze layout")
-
-    def _get_scatter_points_from_maze(self):
-        try:
-            scatter_points = POSITIONS.get('INKY_SCATTER_POINTS', [])
-            if scatter_points:
-                print(f"Loaded {len(scatter_points)} scatter points from maze layout: {scatter_points}")
-                return scatter_points
-            else:
-                print("No scatter points found in maze layout, using fallback")
-                return self._create_fallback_scatter_points()
-        except Exception as e:
-            print(f"Error loading scatter points from maze: {e}")
-            return self._create_fallback_scatter_points()
-
-    def _create_fallback_scatter_points(self):
-        """Create fallback scatter points if maze layout doesn't have them"""
-        # Simple corner-based scatter pattern
-        return [(1, 1), (17, 1), (17, 9), (1, 9)]  # Top-left  # Top-right  # Bottom-right  # Bottom-left
-
-    def set_total_food_count(self, total_count):
-        """Set the total food count from maze initialization"""
-        self.total_food_count = total_count
-
-    def check_food_percentage(self, maze):
-        """Check if 80% of food has been eaten and trigger enraged mode"""
-        if self.total_food_count == 0:
-            return
-
-        current_food = len(maze.pellets) + len(maze.power_pellets)
-        eaten_percentage = (self.total_food_count - current_food) / self.total_food_count
-
-        if eaten_percentage >= 0.8 and not self.is_enraged:
-            # Trigger enraged mode
-            self.is_enraged = True
-            self.ai_mode = "ENRAGED"
-            self.speed = self.base_speed * self.enraged_speed_multiplier
-            print(f"Ghost is now ENRAGED! Speed increased to {self.speed:.2f}")
-            print(f"Food eaten: {eaten_percentage * 100:.1f}%")
+        # FRIGHTENED mode properties
+        self.first_frightened = True  # First time entering FRIGHTENED mode
 
     def heuristic(self, a, b):
-        """Manhattan distance heuristic for A*"""
-        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+        return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
 
-    def get_neighbors(self, maze, pos):
-        """Get valid neighboring positions"""
-        neighbors = []
-        x, y = pos
-        for direction in ["UP", "DOWN", "LEFT", "RIGHT"]:
-            dx, dy = DIRECTIONS[direction]
-            new_x, new_y = x + dx, y + dy
-            if maze.is_valid_position(new_x, new_y):
-                neighbors.append((new_x, new_y))
-        return neighbors
+    def choose_greedy_direction(self, maze, target_pos):
+        eliminate_directions = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
+        best_direction = None
+        best_distance = float('inf')
+        valid_direction = []
+        for direction, (dx, dy) in DIRECTIONS.items():
+            if direction == eliminate_directions[self.direction]:
+                continue
+            nx, ny = self.grid_x + dx, self.grid_y + dy
 
-    def a_star_pathfinding(self, maze, start, goal):
-        """A* pathfinding algorithm"""
-        if not goal or start == goal:
-            return []
+            if not maze.is_valid_position(nx, ny):
+                continue
+            valid_direction.append(direction)
+            distance = self.heuristic((nx, ny), target_pos)
+            if distance < best_distance:
+                best_distance = distance
+                best_direction = direction
+        if not valid_direction:
+            reverse_dir = eliminate_directions[self.direction]
+            dx, dy = DIRECTIONS[reverse_dir]
+            nx, ny = self.grid_x + dx, self.grid_y + dy
+            if maze.is_valid_position(nx, ny):
+                return reverse_dir
+        return best_direction or self.direction
 
-        # Priority queue: (f_score, g_score, position, path)
-        open_set = [(0, 0, start, [])]
-        closed_set = set()
+    def a_star_pathfind(self, maze, start, goal):
+        open_set = []
+        heapq.heappush(open_set, (0, start))
+        came_from = {}
+        g_score = {start: 0}
+        f_score = {start: self.heuristic(start, goal)}
 
         while open_set:
-            f_score, g_score, current, path = heapq.heappop(open_set)
+            current = heapq.heappop(open_set)[1]
 
-            if current in closed_set:
-                continue
-
-            closed_set.add(current)
-            new_path = path + [current]
-
-            # Found goal
             if current == goal:
-                return new_path[1:]  # Exclude starting position
+                # Reconstruct path (excluding start position)
+                path = []
+                while current in came_from:
+                    path.append(current)
+                    current = came_from[current]
+                return path[::-1] if path else []
 
-            # Explore neighbors
-            for neighbor in self.get_neighbors(maze, current):
-                if neighbor in closed_set:
+            for direction, (dx, dy) in DIRECTIONS.items():
+                neighbor = (current[0] + dx, current[1] + dy)
+
+                if not maze.is_valid_position(neighbor[0], neighbor[1]):
                     continue
 
-                new_g_score = g_score + 1
-                h_score = self.heuristic(neighbor, goal)
-                new_f_score = new_g_score + h_score
+                # Apply no-reverse rule: if this is the first step from start position,
+                # don't allow reverse direction
+                if current == start:
+                    reverse_directions = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
+                    non_reverse_options = [
+                        d
+                        for d in DIRECTIONS
+                        if d != reverse_directions[self.direction]
+                        and maze.is_valid_position(current[0] + DIRECTIONS[d][0], current[1] + DIRECTIONS[d][1])
+                    ]
+                    if direction == reverse_directions[self.direction] and non_reverse_options:
+                        continue  # Skip reverse direction from starting position
 
-                heapq.heappush(open_set, (new_f_score, new_g_score, neighbor, new_path))
+                tentative_g_score = g_score[current] + 1
+
+                if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g_score
+                    f_score[neighbor] = g_score[neighbor] + self.heuristic(neighbor, goal)
+                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
 
         return []  # No path found
 
-    def check_player_catch(self, player_positions):
-        """Check if ghost caught any player"""
-        ghost_pos = (self.grid_x, self.grid_y)
+    def get_direction_to_next_position(self, next_pos):
+        dx = next_pos[0] - self.grid_x
+        dy = next_pos[1] - self.grid_y
 
-        for player_pos in player_positions:
-            if player_pos:
-                player_x, player_y = player_pos
-                distance = math.sqrt((ghost_pos[0] - player_x) ** 2 + (ghost_pos[1] - player_y) ** 2)
-
-                if distance <= self.catch_distance:
-                    # Player caught! Enter random mode
-                    self.random_mode = True
-                    self.random_timer = self.random_duration
-                    self.path = []  # Clear current path
-                    print(f"Ghost caught player at {player_pos}! Entering random mode.")
-                    return True
-        return False
-
-    def update_random_mode(self, maze):
-        """Handle random movement mode"""
-        if self.random_timer > 0:
-            self.random_timer -= 1
-
-            # Change direction randomly every 30 frames (0.5 seconds)
-            if self.random_timer % 30 == 0:
-                valid_directions = []
-                for direction in ["UP", "DOWN", "LEFT", "RIGHT"]:
-                    dx, dy = DIRECTIONS[direction]
-                    new_x = self.grid_x + dx
-                    new_y = self.grid_y + dy
-                    if maze.is_valid_position(new_x, new_y):
-                        valid_directions.append(direction)
-
-                if valid_directions:
-                    self.next_direction = random.choice(valid_directions)
+        if dx == 1 and dy == 0:
+            return "RIGHT"
+        elif dx == -1 and dy == 0:
+            return "LEFT"
+        elif dx == 0 and dy == 1:
+            return "DOWN"
+        elif dx == 0 and dy == -1:
+            return "UP"
         else:
-            # Exit random mode
-            self.random_mode = False
-            print("Ghost exiting random mode, resuming AI behavior.")
+            return self.direction  # Fallback to current direction
 
-    def update_ai_mode(self):
-        """Switch between CHASE and SCATTER modes (unless enraged)"""
-        # Don't switch modes if enraged - stay in ENRAGED mode
-        if self.is_enraged:
-            self.ai_mode = "ENRAGED"
-            return
+    def random_direction(self, maze):
+        eliminate_directions = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
+        possible_directions = [d for d in DIRECTIONS if d != eliminate_directions[self.direction]]
+        if possible_directions:
+            new_direction = random.choice(possible_directions)
+            nx, ny = self.grid_x + DIRECTIONS[new_direction][0], self.grid_y + DIRECTIONS[new_direction][1]
+            if maze.is_valid_position(nx, ny):
+                return new_direction
+        return self.direction  # Fallback to current direction if no valid move
 
-        self.mode_timer += 1
+    def reverse_direction(self):
+        reverse_directions = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
+        return reverse_directions[self.direction]
 
-        if self.mode_timer >= self.behavior_switch_interval:
-            # Switch modes
-            if self.ai_mode == "CHASE":
-                self.ai_mode = "SCATTER"
-                print(f"Ghost switching to SCATTER mode - targeting point {self.current_scatter_index}")
-            else:
-                self.ai_mode = "CHASE"
-                print("Ghost switching to CHASE mode")
+    def get_closet_player(self, players):
+        min_distance = float('inf')
+        closest_player = None
+        for player_pos in players:
+            if player_pos is not None:
+                player_grid_x, player_grid_y = player_pos
+                distance = self.heuristic((self.grid_x, self.grid_y), (player_grid_x, player_grid_y))
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_player = player_pos
+        return closest_player
 
-            self.mode_timer = 0
-            self.path = []  # Clear current path when switching modes
+    def moving_algorithm(self, maze, players):
+        # 1) pick target based on mode and determine if we should use A*
+        use_astar = False
+        target_pos = None
 
-    def get_closest_player(self, player_a_pos, player_b_pos):
-        """Get position of closest player"""
-        if player_a_pos and player_b_pos:
-            dist_a = abs(self.grid_x - player_a_pos[0]) + abs(self.grid_y - player_a_pos[1])
-            dist_b = abs(self.grid_x - player_b_pos[0]) + abs(self.grid_y - player_b_pos[1])
-            return player_a_pos if dist_a < dist_b else player_b_pos
-        return player_a_pos or player_b_pos
-
-    def get_scatter_target(self, maze):
-        """Get next target from maze-defined scatter points"""
-        if not self.scatter_points:
-            return (self.grid_x, self.grid_y)
-
-        # Get current target
-        target = self.scatter_points[self.current_scatter_index]
-        target_x, target_y = target
-
-        # Check if we've reached the current target (within 1 cell)
-        current_distance = self.heuristic((self.grid_x, self.grid_y), target)
-        if current_distance <= 1:
-            # Move to next scatter point
-            self.current_scatter_index += self.scatter_direction
-
-            # Check if we need to reverse direction (ping-pong behavior)
-            if self.current_scatter_index >= len(self.scatter_points):
-                self.current_scatter_index = len(self.scatter_points) - 2
-                self.scatter_direction = -1
-                print("Ghost reached end of scatter points, reversing direction")
-            elif self.current_scatter_index < 0:
-                self.current_scatter_index = 1
-                self.scatter_direction = 1
-                print("Ghost reached start of scatter points, moving forward")
-
-            # Get new target
-            if 0 <= self.current_scatter_index < len(self.scatter_points):
-                target = self.scatter_points[self.current_scatter_index]
-                target_x, target_y = target
-                print(f"Ghost new scatter target: {target}")
-
-        # Validate target position
-        if maze.is_valid_position(target_x, target_y):
-            return target
-        else:
-            # Find nearest valid position to target
-            print(f"Invalid scatter target {target}, finding nearest valid position")
-            for radius in range(1, 4):
-                for dx in range(-radius, radius + 1):
-                    for dy in range(-radius, radius + 1):
-                        test_x, test_y = target_x + dx, target_y + dy
-                        if maze.is_valid_position(test_x, test_y):
-                            print(f"Found valid position {(test_x, test_y)} near target {target}")
-                            return (test_x, test_y)
-
-            # Fallback to current position
-            print(f"No valid position found near {target}, staying at current position")
-            return (self.grid_x, self.grid_y)
-
-    def moving_algorithm(self, maze, player_a_position, player_b_position):
-        """Main movement algorithm - CHASE, SCATTER, or ENRAGED mode"""
-        if self.random_mode:
-            return
-
-        # Check food percentage to trigger enraged mode
-        self.check_food_percentage(maze)
-
-        # Update AI mode timer (unless enraged)
-        self.update_ai_mode()
-
-        target = None
-
-        if self.ai_mode in ["CHASE", "ENRAGED"]:
-            # Chase closest player (more aggressively in enraged mode)
-            target = self.get_closest_player(player_a_position, player_b_position)
-            if target and self.ai_mode == "CHASE":
-                print(f"Ghost chasing player at {target}")
+        if self.ai_mode in ("CHASE", "ENRAGED"):
+            target_pos = self.get_closet_player(players)
+            use_astar = True
         elif self.ai_mode == "SCATTER":
-            # Move to scatter target from maze layout
-            target = self.get_scatter_target(maze)
-
-        if target:
-            # Use A* pathfinding to reach target
-            target_path = self.a_star_pathfinding(maze, (self.grid_x, self.grid_y), target)
-
-            if target_path:
-                self.path = target_path
-                self.current_path_index = 0
-
-            # Follow the path
-            if self.path and self.current_path_index < len(self.path):
-                next_pos = self.path[self.current_path_index]
-                next_x, next_y = next_pos
-
-                # Determine direction to next position
-                dx = next_x - self.grid_x
-                dy = next_y - self.grid_y
-
-                if dx > 0:
-                    self.next_direction = "RIGHT"
-                elif dx < 0:
-                    self.next_direction = "LEFT"
-                elif dy > 0:
-                    self.next_direction = "DOWN"
-                elif dy < 0:
-                    self.next_direction = "UP"
+            target_pos = self.get_scatter_point()
+            use_astar = False  # Use normal greedy direction for scatter
+        elif self.ai_mode == "FRIGHTENED":
+            if self.first_frightened:
+                self.first_frightened = False
+                temp_direction = self.reverse_direction()
+                nx, ny = self.grid_x + DIRECTIONS[temp_direction][0], self.grid_y + DIRECTIONS[temp_direction][1]
+                if maze.is_valid_position(nx, ny):
+                    self.next_direction = temp_direction
+                    target_pos = None
+                else:
+                    # If reverse is blocked, pick a random valid direction
+                    valid_dirs = []
+                    for d, (dx, dy) in DIRECTIONS.items():
+                        tx, ty = self.grid_x + dx, self.grid_y + dy
+                        if maze.is_valid_position(tx, ty):
+                            valid_dirs.append(d)
+                    if valid_dirs:
+                        self.next_direction = random.choice(valid_dirs)
+                    target_pos = None
+            else:
+                # In FRIGHTENED mode, choose a random direction
+                new_dir = self.random_direction(maze)
+                if new_dir != self.direction:
+                    self.next_direction = new_dir
+                target_pos = None
+            use_astar = False
+        elif self.ai_mode == "EATEN":
+            target_pos = POSITIONS['GHOST_RESPAWN_POINT']['INKY']
+            use_astar = True
         else:
-            # No target - random movement
-            valid_directions = []
-            for direction in ["UP", "DOWN", "LEFT", "RIGHT"]:
-                dx, dy = DIRECTIONS[direction]
-                new_x = self.grid_x + dx
-                new_y = self.grid_y + dy
-                if maze.is_valid_position(new_x, new_y):
-                    valid_directions.append(direction)
+            target_pos = None
+            use_astar = False
 
-            if valid_directions:
-                self.next_direction = random.choice(valid_directions)
+        # 2) adjust speed in ENRAGED
+        self.speed = self.base_speed * (self.enraged_speed_multiplier if self.ai_mode == "ENRAGED" else 1)
 
-    def update(self, maze, player_a_position=None, player_b_position=None):
-        if not self.can_chase:
+        # 3) Use A* pathfinding or greedy direction based on mode
+        if target_pos:
+            if use_astar:
+                # Use A* pathfinding for CHASE, ENRAGED, and EATEN modes
+                self.path_recalculation_timer += 1
+                if not self.current_path or self.path_recalculation_timer >= self.path_recalculation_interval:
+                    self.current_path = self.a_star_pathfind(maze, (self.grid_x, self.grid_y), target_pos)
+                    self.path_recalculation_timer = 0
+
+                # Follow the calculated path
+                if self.current_path:
+                    next_position = self.current_path[0]
+                    new_dir = self.get_direction_to_next_position(next_position)
+
+                    # Debug print for EATEN mode
+                    if self.ai_mode == "EATEN":
+                        print(f"EATEN mode: Current pos ({self.grid_x}, {self.grid_y}), Next target: {next_position}, Direction: {new_dir}")
+
+                    self.next_direction = new_dir
+                    self.target_grid = next_position
+
+                    # Remove the position we're about to reach from the path
+                    if (self.grid_x, self.grid_y) == next_position:
+                        self.current_path.pop(0)
+                        if self.ai_mode == "EATEN":
+                            print(f"Reached waypoint, removing from path. Path length now: {len(self.current_path)}")
+            else:
+                # Use greedy direction selection for SCATTER mode
+                new_dir = self.choose_greedy_direction(maze, target_pos)
+                if new_dir != self.direction:
+                    self.next_direction = new_dir
+
+                dx, dy = DIRECTIONS[self.next_direction]
+                nx, ny = self.grid_x + dx, self.grid_y + dy
+                if maze.is_valid_position(nx, ny):
+                    self.direction = self.next_direction
+                    self.target_grid = (nx, ny)
+                else:
+                    self.target_grid = (self.grid_x, self.grid_y)
+
+        # 4) FIXED: Ensure we're using the correct target_grid variable
+        else:
+            dx, dy = DIRECTIONS[self.next_direction]
+            nx, ny = self.grid_x + dx, self.grid_y + dy
+            if maze.is_valid_position(nx, ny):
+                self.direction = self.next_direction
+                self.target_grid = (nx, ny)
+            else:
+                self.target_grid = (self.grid_x, self.grid_y)
+
+    def move_towards_target(self):
+        target_px = self.target_grid[0] * CELL_SIZE
+        target_py = self.target_grid[1] * CELL_SIZE
+
+        dx = target_px - self.pixel_x
+        dy = target_py - self.pixel_y
+
+        dist = math.hypot(dx, dy)
+        if dist == 0:
+            # Arrived at target cell
+            self.grid_x, self.grid_y = self.target_grid
+            # Add to movement history
+            self.movement_history.append((self.grid_x, self.grid_y))
+            if len(self.movement_history) > 10:
+                self.movement_history.pop(0)
             return
 
-        # Check if we caught a player
-        player_positions = [pos for pos in [player_a_position, player_b_position] if pos]
-        self.check_player_catch(player_positions)
+        move_dist = min(self.speed, dist)
+        if dist != 0:
+            self.pixel_x += move_dist * dx / dist
+            self.pixel_y += move_dist * dy / dist
 
-        # Handle random mode
-        if self.random_mode:
-            self.update_random_mode(maze)
-        else:
-            # Use movement algorithm
-            self.moving_algorithm(maze, player_a_position, player_b_position)
+        # Snap to grid if close enough
+        if abs(self.pixel_x - target_px) < 1 and abs(self.pixel_y - target_py) < 1:
+            self.pixel_x = target_px
+            self.pixel_y = target_py
+            self.grid_x, self.grid_y = self.target_grid
+            self.movement_history.append((self.grid_x, self.grid_y))
+            if len(self.movement_history) > 10:
+                self.movement_history.pop(0)
 
-        # Update animation timer for bobbing effect (faster when enraged)
-        animation_speed = 0.8 if self.is_enraged else 0.5
-        if self.moving:
-            self.animation_timer += animation_speed
-            self.bob_offset = math.sin(self.animation_timer) * (6 if self.is_enraged else 4)
-        else:
-            self.animation_timer = 0
-            self.bob_offset = 0
+    def get_scatter_point(self):
+        # only one scatter point for Inky
+        return POSITIONS['INKY_GHOST_SCATTER_POINT']
 
-        # Check if we can change direction
-        if self.movement_progress <= 0.2:
-            dx, dy = DIRECTIONS[self.next_direction]
-            new_x = self.grid_x + dx
-            new_y = self.grid_y + dy
+    def kill(self):
+        self.dead = True
+        self.ai_mode = "EATEN"
 
-            if maze.is_valid_position(new_x, new_y):
-                self.direction = self.next_direction
+    def is_dead(self):
+        return self.dead
 
-        # Move in current direction
-        dx, dy = DIRECTIONS[self.direction]
-        target_x = self.grid_x + dx
-        target_y = self.grid_y + dy
+    def get_position(self):
+        return (self.grid_x, self.grid_y)
 
-        if maze.is_valid_position(target_x, target_y):
-            self.moving = True
-            self.movement_progress += self.speed / CELL_SIZE
-            self.stuck_counter = 0
+    def state_change(self, new_state):
+        if new_state == "CHASE" and self.ai_mode != "CHASE":
+            self.ai_mode = "CHASE"
+            self.mode_timer = 0
+            if hasattr(self, 'current_path'):
+                self.current_path = []  # Clear path when entering A* mode
+        elif new_state == "SCATTER" and self.ai_mode != "SCATTER":
+            self.ai_mode = "SCATTER"
+            self.mode_timer = 0
+            if hasattr(self, 'current_path'):
+                self.current_path = []  # Clear path when entering greedy mode
+        elif new_state == "ENRAGED" and self.ai_mode != "ENRAGED":
+            self.ai_mode = "ENRAGED"
+            self.mode_timer = 0
+            if hasattr(self, 'current_path'):
+                self.current_path = []  # Clear path when entering A* mode
+        elif new_state == "FRIGHTENED" and self.ai_mode != "FRIGHTENED":
+            self.ai_mode = "FRIGHTENED"
+            self.first_frightened = True
+            if hasattr(self, 'current_path'):
+                self.current_path = []  # Clear path when entering random mode
+        elif new_state == "EATEN" and self.ai_mode != "EATEN":
+            self.ai_mode = "EATEN"
+            if hasattr(self, 'current_path'):
+                self.current_path = []  # Clear path when entering A* mode
 
-            if self.movement_progress >= 1.0:
-                # Reached next cell
-                old_pos = (self.grid_x, self.grid_y)
-                self.grid_x = target_x
-                self.grid_y = target_y
-                self.movement_progress = 0.0
+    def set_total_food_count(self, total_food_count):
+        self.total_food_count = total_food_count
 
-                # Update path index if following A* path
-                if not self.random_mode and self.path and self.current_path_index < len(self.path):
-                    if (self.grid_x, self.grid_y) == self.path[self.current_path_index]:
-                        self.current_path_index += 1
+    def revive(self):
+        self.dead = False
+        self.ai_mode = "CHASE"
+        self.mode_timer = 0
+        self.is_enraged = False
+        self.movement_history.clear()
 
-                # Add to movement history for grid-based trail
-                self.movement_history.append(old_pos)
-                max_history = 12 if self.is_enraged else 8  # Longer trail when enraged
-                if len(self.movement_history) > max_history:
-                    self.movement_history.pop(0)
-        else:
-            # Can't move in current direction
-            self.moving = False
-            self.movement_progress = 0.0
-            self.stuck_counter += 1
+    def draw_debug_walkability(self, screen, maze):
+        for y in range(maze.height):
+            for x in range(maze.width):
+                rect = pygame.Rect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE)
 
-            # Clear path if stuck (will recalculate)
-            if self.stuck_counter > 5:
-                self.path = []
-                self.stuck_counter = 0
+                if maze.is_valid_position(x, y):
+                    color = (0, 255, 0, 100)  # Green for walkable
+                else:
+                    color = (255, 0, 0, 100)  # Red for wall
 
-        # Update pixel position for smooth movement
-        self._update_pixel_position()
+                surface = pygame.Surface((CELL_SIZE, CELL_SIZE), pygame.SRCALPHA)
+                pygame.draw.rect(surface, color, surface.get_rect())
+                screen.blit(surface, rect.topleft)
 
-    def _update_pixel_position(self):
-        base_x = self.grid_x * CELL_SIZE
-        base_y = self.grid_y * CELL_SIZE
+    def update(self, maze, pos_players, power_up_players):
+        # (0) Enter FRIGHTENED mode if a player collects a power pellet
+        if self.ai_mode != "EATEN" and self.ai_mode != "FRIGHTENED":
+            is_changed = False
+            for player in power_up_players:
+                if player:
+                    is_changed = True
+                    break
+            if is_changed:
+                self.state_change("FRIGHTENED")
+                self.mode_timer = 0
+        if self.ai_mode == "FRIGHTENED":
+            is_changed = False
+            for player in power_up_players:
+                if player:
+                    is_changed = True
+                    break
+            if not is_changed:
+                # If still in FRIGHTENED mode, reset timer
+                self.state_change("CHASE")
+                self.mode_timer = 0
 
-        if self.moving:
-            dx, dy = DIRECTIONS[self.direction]
-            offset_x = dx * CELL_SIZE * self.movement_progress
-            offset_y = dy * CELL_SIZE * self.movement_progress
-            self.pixel_x = base_x + offset_x
-            self.pixel_y = base_y + offset_y
-        else:
-            self.pixel_x = base_x
-            self.pixel_y = base_y
+        # (0.5) Check if Inky move to ghost spawn point
+        if self.ai_mode == "EATEN":
+            now_x, now_y = self.grid_x, self.grid_y
+            respawn_x, respawn_y = POSITIONS['GHOST_RESPAWN_POINT']['INKY']
+            if (now_x, now_y) == (respawn_x, respawn_y):
+                self.revive()
+                # Immediately check if Inky should be enraged after revive
+                if self.total_food_count > 0:
+                    food_percentage = (maze.get_remaining_food_count() / self.total_food_count) * 100
+                    if food_percentage <= 20:
+                        self.is_enraged = True
+                        self.state_change("ENRAGED")
+
+        # (1) Handle state timer for mode switching
+        if self.ai_mode in ("CHASE", "SCATTER"):
+            self.mode_timer += 1
+            if self.mode_timer >= self.behavior_switch_interval:
+                if self.ai_mode == "CHASE":
+                    self.state_change("SCATTER")
+                    self.mode_timer = 0
+                elif self.ai_mode == "SCATTER":
+                    self.state_change("CHASE")
+                    self.mode_timer = 0
+
+        # (2) Check if Inky should enter ENRAGED mode
+        if not self.is_enraged and self.total_food_count > 0:
+            food_percentage = (maze.get_remaining_food_count() / self.total_food_count) * 100
+            if food_percentage <= 20:
+                self.is_enraged = True
+                self.state_change("ENRAGED")
+                print("Inky is enraged! Speed increased.")
+
+        # (3) run the moving algorithm
+        if self.pixel_x % CELL_SIZE == 0 and self.pixel_y % CELL_SIZE == 0:
+            self.moving_algorithm(maze, pos_players)
+
+        # (4) update pixel position
+        self.move_towards_target()
 
     def render(self, screen, maze=None, debug_mode=False):
-        # Draw A* path (blue line) if debug mode
-        if debug_mode and self.path and not self.random_mode:
-            path_points = []
-            # Add current position
-            path_points.append((self.grid_x * CELL_SIZE + CELL_SIZE // 2, self.grid_y * CELL_SIZE + CELL_SIZE // 2))
+        if debug_mode:
+            # Draw walkability grid if debug mode is enabled
+            self.draw_debug_walkability(screen, maze)
 
-            # Add remaining path points
-            for i in range(self.current_path_index, len(self.path)):
-                x, y = self.path[i]
-                path_points.append((x * CELL_SIZE + CELL_SIZE // 2, y * CELL_SIZE + CELL_SIZE // 2))
-
-            if len(path_points) > 1:
-                line_color = (255, 0, 255) if self.is_enraged else (0, 150, 255)  # Purple if enraged
-                line_width = 4 if self.is_enraged else 3
-                pygame.draw.lines(screen, line_color, False, path_points, line_width)
+        if debug_mode and self.current_path and self.ai_mode in ("CHASE", "ENRAGED", "EATEN"):
+            # Draw A* path as purple squares
+            for i, (path_x, path_y) in enumerate(self.current_path):
+                alpha = max(50, 200 - i * 15)  # Fade effect along path
+                path_rect = pygame.Rect(path_x * CELL_SIZE + CELL_SIZE // 3, path_y * CELL_SIZE + CELL_SIZE // 3, CELL_SIZE // 3, CELL_SIZE // 3)
+                pygame.draw.rect(screen, (128, 0, 128), path_rect)  # Purple for A* path
 
         # Draw scatter points and path in scatter mode (green) if debug mode
-        if debug_mode and self.ai_mode == "SCATTER" and not self.random_mode and self.scatter_points:
-            # Draw all scatter points
-            for i, (px, py) in enumerate(self.scatter_points):
-                point = (px * CELL_SIZE + CELL_SIZE // 2, py * CELL_SIZE + CELL_SIZE // 2)
+        if debug_mode and self.ai_mode == "SCATTER":
+            # Draw single scatter point
+            scatter_point = self.get_scatter_point()
+            scatter_x, scatter_y = scatter_point
+            scatter_rect = pygame.Rect(scatter_x * CELL_SIZE + CELL_SIZE // 4, scatter_y * CELL_SIZE + CELL_SIZE // 4, CELL_SIZE // 2, CELL_SIZE // 2)
+            pygame.draw.rect(screen, (0, 255, 0), scatter_rect)
 
-                # Highlight current target
-                color = (255, 255, 0) if i == self.current_scatter_index else (100, 255, 100)
-                radius = 12 if i == self.current_scatter_index else 8
-                pygame.draw.circle(screen, color, point, radius)
-
-                # Draw index number
-                font = pygame.font.Font(None, 20)
-                text = font.render(str(i), True, (0, 0, 0))
-                text_rect = text.get_rect(center=point)
-                screen.blit(text, text_rect)
-
-            # Draw path between scatter points
-            if len(self.scatter_points) > 1:
-                scatter_path_points = []
-                for px, py in self.scatter_points:
-                    scatter_path_points.append((px * CELL_SIZE + CELL_SIZE // 2, py * CELL_SIZE + CELL_SIZE // 2))
-                pygame.draw.lines(screen, (0, 255, 0), False, scatter_path_points, 2)
+        if debug_mode and self.ai_mode == "EATEN":
+            target_pos = POSITIONS['GHOST_RESPAWN_POINT']['INKY']
+            tx, ty = target_pos
+            cx = tx * CELL_SIZE + CELL_SIZE // 2
+            cy = ty * CELL_SIZE + CELL_SIZE // 2
+            pygame.draw.circle(screen, (0, 255, 255), (cx, cy), 6)  # Cyan dot on target
 
         # Draw grid-based movement history (red squares) if debug mode
         if debug_mode and self.movement_history:
@@ -465,6 +459,12 @@ class InkyGhost:
                 # Draw small square at grid position
                 rect = pygame.Rect(hist_x * CELL_SIZE + CELL_SIZE // 4, hist_y * CELL_SIZE + CELL_SIZE // 4, CELL_SIZE // 2, CELL_SIZE // 2)
                 pygame.draw.rect(screen, base_color, rect)
+
+        # Draw next target grid position (blue square) if debug mode
+        if debug_mode and self.target_grid:
+            target_x, target_y = self.target_grid
+            target_rect = pygame.Rect(target_x * CELL_SIZE + CELL_SIZE // 4, target_y * CELL_SIZE + CELL_SIZE // 4, CELL_SIZE // 2, CELL_SIZE // 2)
+            pygame.draw.rect(screen, (0, 0, 255), target_rect)
 
         # Try to get ghost sprite - use fallback sprite names
         sprite = None
@@ -495,91 +495,47 @@ class InkyGhost:
                 screen.blit(glow_surface, (self.pixel_x + CELL_SIZE // 2 - glow_radius, bobbed_y + CELL_SIZE // 2 - glow_radius))
             else:
                 screen.blit(sprite, (self.pixel_x, bobbed_y))
-
-            if self.random_mode:
-                # Add random mode indicator
-                pygame.draw.circle(screen, (255, 0, 255), (int(self.pixel_x + CELL_SIZE // 2), int(bobbed_y - 5)), 3)
         else:
-            # Fallback rectangle with enhanced colors
-            if self.random_mode:
-                color = (255, 0, 255)  # Purple for random mode
-            elif self.is_enraged:
+            if self.is_enraged:
                 color = (255, 50, 50)  # Bright red for enraged mode
             elif self.ai_mode == "CHASE":
-                color = (255, 0, 0)  # Red for chase mode
-            else:  # SCATTER
+                color = (0, 0, 255)  # Blue for chase mode
+            elif self.ai_mode == "SCATTER":
                 color = (0, 255, 255)  # Cyan for scatter mode
+            elif self.ai_mode == "FRIGHTENED":
+                color = (255, 255, 0)  # Yellow for frightened mode
+            elif self.ai_mode == "EATEN":
+                color = (128, 128, 128)  # Gray for eaten mode
+            else:
+                color = (255, 255, 255)  # Default white
             pygame.draw.rect(screen, color, (self.pixel_x, self.pixel_y, CELL_SIZE, CELL_SIZE))
 
         # Debug info
         if debug_mode:
             font = pygame.font.Font(None, 24)
-            if self.random_mode:
-                mode_text = "RANDOM"
-                timer_text = f"{self.random_timer // 60 + 1}s"
+            mode_text = self.ai_mode
+            if self.is_enraged:
+                mode_text += f" SPD:{self.speed:.1f}"
+            timer_text = f"{(self.behavior_switch_interval - self.mode_timer) // 60 + 1}s" if not self.is_enraged else "∞"
+            if self.ai_mode != "FRIGHTENED" and self.ai_mode != "EATEN" and self.ai_mode != "ENRAGED":
+                debug_text = f"{mode_text} {timer_text}"
             else:
-                mode_text = self.ai_mode
-                if self.ai_mode == "SCATTER":
-                    mode_text += f" ({self.current_scatter_index})"
-                elif self.is_enraged:
-                    mode_text += f" SPD:{self.speed:.1f}"
-                timer_text = f"{(self.behavior_switch_interval - self.mode_timer) // 60 + 1}s" if not self.is_enraged else "∞"
-            debug_text = f"{mode_text} {timer_text}"
+                debug_text = f"{mode_text}"
             text_surface = font.render(debug_text, True, (255, 255, 255))
             screen.blit(text_surface, (self.pixel_x, self.pixel_y - 30))
 
-    def reset_position(self, start_x, start_y):
-        self.grid_x = start_x
-        self.grid_y = start_y
-        self.pixel_x = start_x * CELL_SIZE
-        self.pixel_y = start_y * CELL_SIZE
+    def reset_position(self, x, y):
+        self.grid_x = x
+        self.grid_y = y
+        self.pixel_x = x * CELL_SIZE
+        self.pixel_y = y * CELL_SIZE
         self.direction = "LEFT"
         self.next_direction = "LEFT"
         self.moving = False
         self.movement_progress = 0.0
-        self.animation_timer = 0
-        self.bob_offset = 0
-        self.movement_history = []
-        self.stuck_counter = 0
-        self.path = []
-        self.current_path_index = 0
-        self.random_mode = False
-        self.random_timer = 0
-        self.ai_mode = "CHASE"
-        self.mode_timer = 0
-
-        # Reset enraged state
-        self.is_enraged = False
-        self.speed = self.base_speed
-
-        # Reset scatter system - reload from maze layout
-        self.scatter_points = self._get_scatter_points_from_maze()
-        self.current_scatter_index = 0
-        self.scatter_direction = 1
-
-    def get_position(self):
-        return self.grid_x, self.grid_y
-
-    def set_target(self, target_a_pos, target_b_pos):
-        """Set target to closest player"""
-        target = self.get_closest_player(target_a_pos, target_b_pos)
-        self.target = target
-
-    def is_dead(self):
-        return self.dead
-
-    def kill(self):
-        """Mark ghost as dead"""
-        self.dead = True
-        self.can_chase = False
-        self.moving = False
-        self.path = []
-        self.current_path_index = 0
-        print(f"Inky Ghost {self.player_id} has been killed!")
-
-    def revive(self, start_x, start_y):
-        """Revive ghost at starting position"""
-        self.reset_position(start_x, start_y)
         self.dead = False
-        self.can_chase = True
-        print(f"Inky Ghost {self.player_id} has been revived at ({start_x}, {start_y})!")
+        self.is_enraged = False
+        self.current_path.clear()
+        self.movement_history.clear()
+        self.animation_timer = 0
+        self.bob_offset = 0.0
