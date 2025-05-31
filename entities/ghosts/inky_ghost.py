@@ -50,7 +50,7 @@ class InkyGhost:
         # Food tracking for enraged mode
         self.total_food_count = 0  # Will be set by maze
         self.is_enraged = False  # Triggered when 80% food eaten
-        self.enraged_speed_multiplier = 2  # 60% speed increase when enraged
+        self.enraged_speed_multiplier = 1.5  # 60% speed increase when enraged
 
         # FRIGHTENED mode properties
         self.first_frightened = True  # First time entering FRIGHTENED mode
@@ -381,7 +381,11 @@ class InkyGhost:
                     break
             if not is_changed:
                 # If still in FRIGHTENED mode, reset timer
-                self.state_change("CHASE")
+                if self.is_enraged:
+                    self.state_change("ENRAGED")
+                else:
+                    self.state_change("CHASE")
+
                 self.mode_timer = 0
 
         # (0.5) Check if Inky move to ghost spawn point

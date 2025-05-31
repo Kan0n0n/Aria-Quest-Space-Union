@@ -20,7 +20,7 @@ def quick_test():
         from core.sprite_manager import SpriteManager
         from core.maze import Maze
         from entities.player import Player
-        from entities.ai_player import AIPlayer
+        from entities.ai.ai_player import AIPlayer
         from ui.game_ui import GameUI
 
         print("✓ All imports successful")

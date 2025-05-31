@@ -10,7 +10,7 @@ from constants import *
 from ui.game_ui import GameUI
 from core.maze import Maze
 from entities.player import Player
-from entities.ai_player import AIPlayer
+from entities.ai.ai_player import AIPlayer
 from core.sprite_manager import SpriteManager
 from game.game_state import GameState, GameStateManager
 

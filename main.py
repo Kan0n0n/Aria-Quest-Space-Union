@@ -9,13 +9,13 @@ from core.maze import Maze
 from core.intro import CinematicIntro
 from ui.game_ui import GameUI
 from core.music import OneShotMusicManager
-from benchmark_stuff import AIBenchmark, AlgorithmSwitcher
 from maze_layout import POSITIONS, MAZE_INFO  # Import position definitions
+from benchmark_stuff import AlgorithmSwitcher
 
 # Entities
 from entities.player import Player
-from entities.ai_player import AIPlayer
-from entities.inky_ghost import InkyGhost
+from entities.ai.ai_player import AIPlayer
+from entities.ghosts.inky_ghost import InkyGhost
 
 # Game handler
 from game.game_state import GameState, GameStateManager
@@ -46,6 +46,9 @@ class PacmanGame:
         self.hide_player1 = False  # Hide player 1 during intro
         self.hide_all_ghosts = False  # Hide all ghosts during intro
 
+        # Initialize algorithm switcher
+        self.algorithm_switcher = AlgorithmSwitcher()
+
         # Game state
         self.running = True
         self.music_started = False
@@ -53,19 +56,6 @@ class PacmanGame:
 
         self.debug_mode = False  # Set to True to enable debug mode
         self.test_mode = False  # Set to True to enable test mode
-
-        # Add AI management systems
-        self.ai_benchmark = AIBenchmark()
-        self.algorithm_switcher = AlgorithmSwitcher()
-
-        # Benchmark settings
-        self.benchmark_mode = False
-        self.benchmark_display = True  # True for in-game display, False for file only
-        self.auto_benchmark_on_start = True
-
-        # Display benchmark results
-        self.show_benchmark_ui = False
-        self.benchmark_results = None
 
         # Initialize players
         self._initialize_players()
@@ -153,16 +143,10 @@ class PacmanGame:
         print("AI should start hunting ghost...")
 
     def handle_test_keys(self, keys):
-        if keys[pygame.K_F1]:
-            self.test_ghost_flee_behavior()
-        elif keys[pygame.K_F2]:
-            self.test_ghost_hunting()
-        elif keys[pygame.K_F3]:
-            self.test_ai_ghost_hunting()
-        elif keys[pygame.K_F4]:
+        if keys[pygame.K_F4]:
             # Give player1 power pellet
-            self.player1.power_timer = 300
-            print("Player 1 powered up!")
+            self.player2.power_timer = 300
+            print("Player 2 powered up!")
         elif keys[pygame.K_F5]:
             # Reset all positions
             player1_pos = POSITIONS['PLAYER1_START']
@@ -231,79 +215,6 @@ class PacmanGame:
             y_offset += 15
 
         screen.blit(info_surface, (info_x, info_y))
-
-    def render_benchmark_ui(self, screen):
-        """Render benchmark results UI"""
-        if not self.show_benchmark_ui or not self.benchmark_results:
-            return
-
-        # Create benchmark panel
-        panel_width = 600
-        panel_height = 400
-        panel_x = (SCREEN_WIDTH - panel_width) // 2
-        panel_y = (SCREEN_HEIGHT - panel_height) // 2
-
-        # Semi-transparent background
-        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 150))
-        screen.blit(overlay, (0, 0))
-
-        # Main panel
-        panel_surface = pygame.Surface((panel_width, panel_height))
-        panel_surface.fill((30, 30, 30))
-        pygame.draw.rect(panel_surface, WHITE, (0, 0, panel_width, panel_height), 2)
-
-        font = pygame.font.Font(None, 24)
-        small_font = pygame.font.Font(None, 20)
-
-        y_offset = 20
-
-        # Title
-        title = font.render("Algorithm Benchmark Results", True, WHITE)
-        title_rect = title.get_rect(centerx=panel_width // 2)
-        panel_surface.blit(title, (title_rect.x, y_offset))
-        y_offset += 40
-
-        # Headers
-        headers = ["Algorithm", "Tests", "Avg Time", "Avg Path", "Success Rate"]
-        header_positions = [20, 150, 220, 300, 420]
-
-        for i, header in enumerate(headers):
-            text = small_font.render(header, True, (200, 200, 200))
-            panel_surface.blit(text, (header_positions[i], y_offset))
-        y_offset += 25
-
-        # Draw separator line
-        pygame.draw.line(panel_surface, WHITE, (20, y_offset), (panel_width - 20, y_offset), 1)
-        y_offset += 10
-
-        # Results
-        for algorithm, stats in self.benchmark_results.items():
-            row_data = [
-                algorithm,
-                str(stats['tests_run']),
-                f"{stats['average_time']:.3f}s",
-                f"{stats['average_path_length']:.1f}",
-                f"{stats['success_rate']:.1%}",
-            ]
-
-            for i, data in enumerate(row_data):
-                color = WHITE if i == 0 else (180, 180, 180)
-                text = small_font.render(data, True, color)
-                panel_surface.blit(text, (header_positions[i], y_offset))
-            y_offset += 25
-
-        # Instructions
-        y_offset += 20
-        instructions = ["Press F12 to save results to file", "Press ESC to close this panel"]
-
-        for instruction in instructions:
-            text = small_font.render(instruction, True, (150, 150, 150))
-            text_rect = text.get_rect(centerx=panel_width // 2)
-            panel_surface.blit(text, (text_rect.x, y_offset))
-            y_offset += 20
-
-        screen.blit(panel_surface, (panel_x, panel_y))
 
     def render_debug_info(self, screen):
         if not self.debug_mode:
@@ -386,29 +297,12 @@ class PacmanGame:
         self.player2 = AIPlayer(
             player_id="ai1", start_x=player2_pos[0], start_y=player2_pos[1], sprite_manager=self.sprite_manager, ai_type="reflex_agent"
         )
-        self.player2.set_benchmark(self.ai_benchmark)
-
-        if self.auto_benchmark_on_start:
-            self._run_auto_benchmark()
 
         # Inky Ghost
         self.inky_ghost = InkyGhost(player_id="inky", start_x=ghost_pos[0], start_y=ghost_pos[1], sprite_manager=self.sprite_manager)
 
         total_food = len(self.maze.pellets) + len(self.maze.power_pellets)
         self.inky_ghost.set_total_food_count(total_food)
-
-    def _run_auto_benchmark(self):
-        """Run automatic benchmark at game start"""
-        print("Running automatic benchmark...")
-        self.benchmark_mode = True
-        self.player2.run_comprehensive_benchmark(self.maze, num_tests=5)
-        self.benchmark_results = self.ai_benchmark.get_summary()
-
-        if not self.benchmark_display:
-            # Save to file if not displaying in-game
-            self.ai_benchmark.save_to_file()
-        else:
-            self.show_benchmark_ui = True
 
     def handle_algorithm_keys(self, keys):
         """Handle algorithm switching keys"""
@@ -420,27 +314,10 @@ class PacmanGame:
             new_algorithm = self.algorithm_switcher.previous_algorithm()
             self.player2.change_algorithm(new_algorithm)
 
-        elif keys[pygame.K_F11]:  # Run benchmark
-            self.benchmark_mode = True
-            self.player2.run_comprehensive_benchmark(self.maze, num_tests=3)
-            self.benchmark_results = self.ai_benchmark.get_summary()
-            self.show_benchmark_ui = True
-
-        elif keys[pygame.K_F12]:  # Save benchmark to file
-            if self.benchmark_results:
-                self.ai_benchmark.save_to_file()
-            else:
-                print("No benchmark results to save!")
-
     def handle_events(self):
         events = pygame.event.get()
 
-        for event in events:
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE and self.show_benchmark_ui:
-                    self.show_benchmark_ui = False
-
-        # Define callback functions for input handler
+        # Define all callback functions for the input handler
         callbacks = {
             "quit": lambda: setattr(self, 'running', False),
             "start_game": self._start_game,
@@ -449,17 +326,68 @@ class PacmanGame:
             "music_toggle": self._toggle_music,
             "volume_up": self._volume_up,
             "volume_down": self._volume_down,
+            # Test functions
+            "test_ghost_flee": self.test_ghost_flee_behavior,
+            "test_ghost_hunt": self.test_ghost_hunting,
+            "test_ai_hunt": self.test_ai_ghost_hunting,
+            "power_player2": lambda: self._power_player2(),
+            "reset_positions": self._reset_positions,
+            "toggle_debug": self._toggle_debug,
+            "toggle_hide_player1": self._toggle_hide_player1,
+            "toggle_hide_ghosts": self._toggle_hide_ghosts,
+            # Algorithm switching
+            "next_algorithm": self._next_algorithm,
+            "prev_algorithm": self._prev_algorithm,
+            "run_benchmark": lambda: print("Benchmark not implemented yet"),
+            "save_results": lambda: print("Save results not implemented yet"),
         }
 
+        # Use input handler to process all events
         self.input_handler.handle_events(events, self.state_manager, callbacks)
 
-        # Handle player input
+        # Handle continuous player input
         keys = pygame.key.get_pressed()
         self.input_handler.handle_player_input(keys, self.player1, self.state_manager)
 
-        # Handle test keys (only during gameplay)
-        if self.state_manager.is_state(GameState.PLAYING):
-            self.handle_test_keys(keys)
+    def _power_player2(self):
+        self.player2.power_timer = 300
+        print("Player 2 powered up!")
+
+    def _reset_positions(self):
+        player1_pos = POSITIONS['PLAYER1_START']
+        player2_pos = POSITIONS['PLAYER2_START']
+        ghost_pos = POSITIONS['INKY_GHOST_START']
+
+        self.player1.reset_position(player1_pos[0], player1_pos[1])
+        self.player2.reset_position(player2_pos[0], player2_pos[1])
+
+        self.inky_ghost.grid_x = ghost_pos[0]
+        self.inky_ghost.grid_y = ghost_pos[1]
+        self.inky_ghost.pixel_x = self.inky_ghost.grid_x * CELL_SIZE
+        self.inky_ghost.pixel_y = self.inky_ghost.grid_y * CELL_SIZE
+        print("All positions reset!")
+
+    def _toggle_debug(self):
+        self.debug_mode = not self.debug_mode
+        print(f"Debug mode: {'ON' if self.debug_mode else 'OFF'}")
+
+    def _toggle_hide_player1(self):
+        self.hide_player1 = not self.hide_player1
+        print(f"Hide Player 1: {'ON' if self.hide_player1 else 'OFF'}")
+
+    def _toggle_hide_ghosts(self):
+        self.hide_all_ghosts = not self.hide_all_ghosts
+        print(f"Hide All Ghosts: {'ON' if self.hide_all_ghosts else 'OFF'}")
+
+    def _next_algorithm(self):
+        new_algorithm = self.algorithm_switcher.next_algorithm()
+        self.player2.change_algorithm(new_algorithm)
+        print(f"Switched to: {new_algorithm}")
+
+    def _prev_algorithm(self):
+        new_algorithm = self.algorithm_switcher.previous_algorithm()
+        self.player2.change_algorithm(new_algorithm)
+        print(f"Switched to: {new_algorithm}")
 
     def _start_game(self):
         self.state_manager.change_state(GameState.PLAYING)
@@ -596,7 +524,6 @@ class PacmanGame:
 
         if self.state_manager.current_state in [GameState.PLAYING, GameState.PAUSED]:
             self.render_algorithm_info(self.screen)
-            self.render_benchmark_ui(self.screen)
 
         if self.state_manager.is_state(GameState.START):
             self.ui.render_start_screen(self.screen)

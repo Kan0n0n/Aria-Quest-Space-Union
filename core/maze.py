@@ -12,6 +12,7 @@ class Maze:
         self.height = len(self.layout)
         self.pellets = set()
         self.power_pellets = set()
+        self.total_pellets = 0
         self.wall_image = pygame.image.load("assets/Dungeon_brick_wall_grey.png.png").convert_alpha()
         self.wall_image = pygame.transform.scale(self.wall_image, (CELL_SIZE, CELL_SIZE))
         self.background = StarryBackground()
@@ -37,6 +38,8 @@ class Maze:
                     self.pellets.add((x, y))
                 elif self.layout[y][x] == 2:  # big food
                     self.power_pellets.add((x, y))
+
+        self.total_pellets = len(self.pellets) + len(self.power_pellets)
 
     def update_animations(self):
         self.animation_timer += 1
@@ -123,6 +126,19 @@ class Maze:
             if self.is_valid_position(new_x, new_y):
                 neighbors.append((new_x, new_y, direction))
         return neighbors
+
+    def get_unexplored_positions(self, current_x, current_y):
+        unexplored = []
+        for y in range(self.height):
+            for x in range(self.width):
+                if (
+                    self.is_valid_position(x, y)
+                    and (x, y) not in self.pellets
+                    and (x, y) not in self.power_pellets
+                    and (x, y) != (current_x, current_y)
+                ):
+                    unexplored.append((x, y))
+        return unexplored
 
     def render(self, screen):
         self.update_animations()
