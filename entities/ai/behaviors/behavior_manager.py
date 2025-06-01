@@ -2,6 +2,8 @@ from .reflex_agent import ReflexAgentBehavior
 from .smart_hunter import SmartHunterBehavior
 from .competitive import CompetitiveBehavior
 from .simple import SimpleBFSBehavior, SimpleDFSBehavior, SimpleUCSBehavior, SimpleAStarBehavior
+from .all_food_collecter import AllFoodCollectionBehavior
+from .four_corner_problem import FourCornerProblemBehavior
 
 
 class BehaviorManager:
@@ -15,6 +17,8 @@ class BehaviorManager:
             "simple_dfs": SimpleDFSBehavior(ai_player),
             "simple_ucs": SimpleUCSBehavior(ai_player),
             "simple_astar": SimpleAStarBehavior(ai_player),
+            "all_food_collector": AllFoodCollectionBehavior(ai_player),
+            "four_corner_problem": FourCornerProblemBehavior(ai_player),
         }
 
     def execute_behavior(self, maze, situation):

@@ -20,6 +20,8 @@ class Maze:
         self.pellet_image = pygame.transform.scale(self.pellet_image, (32, 32))
         self.power_pellet_image = pygame.image.load("assets/rubber_ducktopus.png").convert_alpha()
         self.power_pellet_image = pygame.transform.scale(self.power_pellet_image, (32, 32))
+        self.initial_pellets_set = set()  # Mới
+        self.initial_power_pellets_set = set()
 
         # Animation variables
         self.animation_timer = 0
@@ -40,6 +42,8 @@ class Maze:
                     self.power_pellets.add((x, y))
 
         self.total_pellets = len(self.pellets) + len(self.power_pellets)
+        self.initial_pellets_set = set(self.pellets)  # Mới
+        self.initial_power_pellets_set = set(self.power_pellets)
 
     def update_animations(self):
         self.animation_timer += 1
@@ -190,3 +194,9 @@ class Maze:
 
     def get_remaining_food_count(self):
         return len(self.pellets) + len(self.power_pellets)
+
+    def is_corner(self, x, y):
+        # Check if the position is a corner based on the layout
+        if (x, y) in [(0, 0), (self.width - 1, 0), (0, self.height - 1), (self.width - 1, self.height - 1)]:
+            return True
+        return False

@@ -83,10 +83,9 @@ class SpriteManager:
             "right": os.path.join(assets_path, "mizuki_right.png"),
         }
 
-        
-
         self.load_custom_sprites("player1", ena_sprites)
         self.load_custom_sprites("ai1", mizuki_sprites)
+        self.load_custom_sprites("test_ai", mizuki_sprites)
 
         # Look for other sprite patterns
         files = os.listdir(assets_path)

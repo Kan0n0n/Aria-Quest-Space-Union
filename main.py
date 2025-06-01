@@ -10,7 +10,7 @@ from core.intro import CinematicIntro
 from ui.game_ui import GameUI
 from core.music import OneShotMusicManager
 from maze_layout import POSITIONS, MAZE_INFO  # Import position definitions
-from benchmark_stuff import AlgorithmSwitcher
+from entities.ai.algorithm_switcher import AlgorithmSwitcher, AIBenchmark
 
 # Entities
 from entities.player import Player
@@ -56,6 +56,14 @@ class PacmanGame:
 
         self.debug_mode = False  # Set to True to enable debug mode
         self.test_mode = False  # Set to True to enable test mode
+
+        self.four_corners_completed_time = 0  # Track time for Four Corners completion
+
+        self.benchmark_runner = AIBenchmark()
+        self.benchmark_mode = False  # Flag to control if we are in benchmark mode
+        self.benchmark_algorithms_to_test = []  # List of algorithms to test
+        self.current_benchmark_index = 0
+        self.current_benchmark_run_start_time = 0
 
         # Initialize players
         self._initialize_players()
@@ -382,11 +390,17 @@ class PacmanGame:
     def _next_algorithm(self):
         new_algorithm = self.algorithm_switcher.next_algorithm()
         self.player2.change_algorithm(new_algorithm)
+        if new_algorithm == "four_corner_problem":
+            print("Starting Four Corners mode!")
+            self.player2.ai_state.four_corners_start_time = pygame.time.get_ticks()
         print(f"Switched to: {new_algorithm}")
 
     def _prev_algorithm(self):
         new_algorithm = self.algorithm_switcher.previous_algorithm()
         self.player2.change_algorithm(new_algorithm)
+        if new_algorithm == "four_corner_problem":
+            print("Starting Four Corners mode!")
+            self.player2.ai_state.four_corners_start_time = pygame.time.get_ticks()
         print(f"Switched to: {new_algorithm}")
 
     def _start_game(self):
@@ -515,6 +529,17 @@ class PacmanGame:
 
         # Blit game surface to main screen at the correct position
         self.screen.blit(game_surface, (game_area['x'], game_area['y']))
+
+        if self.player2.ai_state.is_through_four_corners:
+            font = pygame.font.Font(None, 24)
+            if self.four_corners_completed_time == 0:
+                self.player2.ai_state.four_corners_completion_time = pygame.time.get_ticks()
+                self.four_corners_completed_time = (
+                    self.player2.ai_state.four_corners_completion_time - self.player2.ai_state.four_corners_start_time
+                ) / 1000
+            text_surface = font.render(f"Passed 4 Corners in {self.four_corners_completed_time}!", True, YELLOW)
+            text_rect = text_surface.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 50))
+            self.screen.blit(text_surface, text_rect)
 
         # FIXED: Always render UI bars for gameplay
         self.ui.render_gameplay_ui(self.screen, self.player1, self.player2, self.maze, "PLAYING")

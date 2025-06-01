@@ -24,6 +24,8 @@ class AIPlayer(PlayerBase):
         self.next_direction = "LEFT"
         self.speed = AI_SPEED if 'AI_SPEED' in globals() else PLAYER_SPEED
 
+        self.total_moves_made = 0
+
     def update(self, maze, player_position=None, ghosts_positions=None):
         # Use base class methods
         self.update_invincibility()
@@ -94,6 +96,10 @@ class AIPlayer(PlayerBase):
                 self.grid_x = target_x
                 self.grid_y = target_y
                 self.movement_progress = 0.0
+                self.total_moves_made += 1
+
+                if maze.is_corner(self.grid_x, self.grid_y):
+                    self.ai_state.add_corner_been_through((self.grid_x, self.grid_y))
 
                 # Collect pellets
                 points = maze.collect_pellet(self.grid_x, self.grid_y)
@@ -105,6 +111,7 @@ class AIPlayer(PlayerBase):
                         self.power_timer = self.power_up_duration
                     else:
                         self.invincibility_blink_timer = 0.0
+                    self.ai_state.pellet_eaten((self.grid_x, self.grid_y))
                 self.score += points
         else:
             self.moving = False
